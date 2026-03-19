@@ -1,0 +1,10 @@
+C:\Users\rodri\MyStuff\FCUL\Masters\Semestre2\SRSD\Project\SRSD\gallery-log\target\debug\deps\gallery_log-e8de4276ada598a5.d: src\main.rs src\crypto.rs src\log.rs src\logappend.rs src\logread.rs src\state.rs
+
+C:\Users\rodri\MyStuff\FCUL\Masters\Semestre2\SRSD\Project\SRSD\gallery-log\target\debug\deps\libgallery_log-e8de4276ada598a5.rmeta: src\main.rs src\crypto.rs src\log.rs src\logappend.rs src\logread.rs src\state.rs
+
+src\main.rs:
+src\crypto.rs:
+src\log.rs:
+src\logappend.rs:
+src\logread.rs:
+src\state.rs:
