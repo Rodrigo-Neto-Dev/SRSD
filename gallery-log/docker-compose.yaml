@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  gallery-log:
+    build: .
+    image: gallery-log
+    volumes:
+      # The project's ./logs folder is mounted to /app/logs inside the container.
+      # Log files written to /app/logs/... will persist on your machine automatically.
+      - ./logs:/app/logs
+    working_dir: /app
+    stdin_open: true
+    tty: true
