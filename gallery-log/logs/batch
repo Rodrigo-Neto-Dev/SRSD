@@ -1,0 +1,3 @@
+./logappend -T 1 -K secret -A -E Alice logs/log1
+./logappend -T 2 -K secret -A -G Bob logs/log1
+./logappend -T 3 -K secret -A -E Alice -R 1 logs/log1
