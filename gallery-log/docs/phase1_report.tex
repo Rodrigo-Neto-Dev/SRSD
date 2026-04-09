@@ -1,15 +1,161 @@
-%! Author = Rodrigo Neto Local
-%! Date = 3/19/2026
+\UseRawInputEncoding
+\documentclass[a4paper, 12pt]{article}
 
-% Preamble
-\documentclass[11pt]{article.cls}
+\usepackage[a4paper, margin=1in]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
 
-% Packages
-\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
 
-% Document
+% Header and Footer Configuration
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{Segurança de Redes e Sistemas Distribuídos - 2026}
+\fancyhead[R]{\includegraphics[height=1.5cm]{logo.png}}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{45pt} 
+\setlength{\headsep}{20pt}
+
+% Section Titles Styling
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{1em}{}
+
 \begin{document}
 
+\begin{titlepage}
+    \centering
+    \includegraphics[width=3cm]{logo.png}\par\vspace{1cm}
+    \vspace*{1cm}
+    {\Large \textbf{Faculdade de Ciências da Universidade de Lisboa}}\\[0.5em]
+    \vspace{4cm}
+    {\Huge \textbf{Secure Gallery Log System}} \\
+    \vspace{1.5cm}
+    {\Large \textbf{José Sampaio, fc66191}}\\[0.5em]
+    {\Large \textbf{Rodrigo Neto, fc59850}}\\[0.5em]
+    {\Large \textbf{Gabriel Cambraia, 58671}}\\[1em]
+    \vfill
 
+{\large Segurança de Redes e Sistemas Distribuídos}\\
+{\large 2026}\par\vspace{2cm}
+
+\end{titlepage}
+\tableofcontents
+\newpage
+
+    \section{Introduction}
+    Brief overview of the project and goals.
+
+    \section{System Architecture}
+    \subsection{Overview}
+    Describe:
+    \begin{itemize}
+        \item Components: \texttt{logappend}, \texttt{logread}
+        \item Threat model
+        \item Assumptions
+    \end{itemize}
+
+    \subsection{Design Decisions}
+    Explain:
+    \begin{itemize}
+        \item Why you chose your architecture
+        \item Trade-offs (security vs performance)
+    \end{itemize}
+
+    \section{Log Format}
+    \subsection{Structure}
+    Describe exact binary/text format:
+    \begin{itemize}
+        \item Header
+        \item Entries
+        \item Metadata
+    \end{itemize}
+
+    \subsection{Example Entry}
+    \begin{lstlisting}
+<timestamp>|<type>|<name>|<room>|<MAC>
+    \end{lstlisting}
+
+    \section{Security Protocol}
+    \subsection{Goals}
+    \begin{itemize}
+        \item Confidentiality
+        \item Integrity
+        \item Authenticity
+    \end{itemize}
+
+    \subsection{Cryptographic Primitives}
+    List what you use:
+    \begin{itemize}
+        \item Hash function
+        \item MAC (e.g., HMAC)
+        \item Encryption (if used)
+    \end{itemize}
+
+    \subsection{Protocol Description}
+    Step-by-step:
+    \begin{enumerate}
+        \item Key derivation from token
+        \item Entry creation
+        \item Integrity chaining (e.g., hash chain)
+    \end{enumerate}
+
+    \section{Implementation Details}
+    \subsection{logappend}
+    Explain:
+    \begin{itemize}
+        \item Argument parsing
+        \item State validation
+        \item Log writing
+    \end{itemize}
+
+    \subsection{logread}
+    Explain:
+    \begin{itemize}
+        \item Log verification
+        \item Query handling
+    \end{itemize}
+
+    \section{Performance Analysis}
+    \begin{itemize}
+        \item Time complexity
+        \item File size growth
+        \item Bottlenecks
+    \end{itemize}
+
+    \section{Security Analysis}
+    \subsection{Attack 1: <Name>}
+    \textbf{Description:} \\
+    \textbf{Mitigation:} \\
+    \textbf{Code reference:}
+
+    \subsection{Attack 2: <Name>}
+    ...
+
+    \subsection{Attack 3: <Name>}
+    ...
+
+    \subsection{Attack 4: <Name>}
+    ...
+
+    \section{Intentional Vulnerability}
+    \begin{itemize}
+        \item Description
+        \item Why it is subtle
+        \item Potential exploitation
+    \end{itemize}
+
+    \section{Conclusion}
+    Summary and future improvements.
 
 \end{document}
+
+

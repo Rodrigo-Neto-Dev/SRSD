@@ -139,9 +139,13 @@ fn main() {
         }
 
         Command::Intersection { persons } => {
-            let result = intersection_query(&log.entries, &persons);
-            let names: Vec<String> = result.iter().map(|(_, n)| n.clone()).collect();
-            println!("{}", names.join(","));
+            let rooms = intersection_query(&log.entries, &persons);
+            // rooms is already sorted ascending; print as comma-separated IDs.
+            // If no rooms qualify, print nothing (empty line suppressed).
+            if !rooms.is_empty() {
+                let s: Vec<String> = rooms.iter().map(|r| r.to_string()).collect();
+                println!("{}", s.join(","));
+            }
         }
     }
 }

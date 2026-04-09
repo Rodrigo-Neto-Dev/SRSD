@@ -258,11 +258,10 @@ pub fn rooms_occupancy(
 pub fn room_history(entries: &[LogEntry], pt: &PersonType, name: &str) -> Option<Vec<u32>> {
     if !entries.iter().any(|e| &e.person_type == pt && e.name == name) { return None; }
     let mut rooms = Vec::new();
-    let mut seen = HashSet::new();
     for e in entries {
         if &e.person_type == pt && e.name == name {
             if matches!(e.action, Action::Arrival) {
-                if let Some(r) = e.room { if seen.insert(r) { rooms.push(r); } }
+                if let Some(r) = e.room { rooms.push(r); }
             }
         }
     }
@@ -271,13 +270,16 @@ pub fn room_history(entries: &[LogEntry], pt: &PersonType, name: &str) -> Option
 
 // ── Intersection ──────────────────────────────────────────────────────────────
 
+/// Returns the sorted list of room IDs that were occupied by ALL specified
+/// persons at the same time, over the complete history of the gallery.
+/// Persons not present in the log are ignored (not treated as an error).
 pub fn intersection_query(
     entries: &[LogEntry],
     targets: &[(PersonType, String)],
-) -> Vec<(PersonType, String)> {
+) -> Vec<u32> {
     if targets.is_empty() { return vec![]; }
 
-    type Iv = (u32, u64, u64); // room, enter, leave
+    type Iv = (u32, u64, u64); // (room, enter_ts, leave_ts)
     let mut intervals: HashMap<(PersonType, String), Vec<Iv>> = HashMap::new();
     let mut cur: HashMap<(PersonType, String), (u32, u64)> = HashMap::new();
 
@@ -293,28 +295,55 @@ pub fn intersection_query(
             _ => {}
         }
     }
+    // Anyone still in a room at end-of-log gets u64::MAX as leave time
     for (k, (r, ts)) in cur {
         intervals.entry(k).or_default().push((r, ts, u64::MAX));
     }
 
-    let target_ivs: Vec<Option<&Vec<Iv>>> = targets.iter()
-        .map(|(pt, n)| intervals.get(&(pt.clone(), n.clone())))
+    // Keep only targets that actually appear in the log; ignore unknowns per spec
+    let known_targets: Vec<&Vec<Iv>> = targets.iter()
+        .filter_map(|(pt, n)| intervals.get(&(pt.clone(), n.clone())))
         .collect();
-    if target_ivs.iter().any(|o| o.is_none()) { return vec![]; }
-    let target_ivs: Vec<&Vec<Iv>> = target_ivs.into_iter().map(|o| o.unwrap()).collect();
 
-    let mut result = Vec::new();
-    'outer: for (cand, civs) in &intervals {
-        if targets.iter().any(|(pt, n)| pt == &cand.0 && n == &cand.1) { continue; }
-        for civ in civs {
-            let (room, cs, ce) = *civ;
-            let all = target_ivs.iter().all(|tivs| {
-                tivs.iter().any(|&(tr, ts, te)| tr == room && ts < ce && te > cs)
-            });
-            if all { result.push((cand.0.clone(), cand.1.clone())); continue 'outer; }
+    // Need at least one known target to do anything meaningful
+    if known_targets.is_empty() { return vec![]; }
+
+    // Collect every room ID that ever appears across all known targets
+    let all_rooms: HashSet<u32> = known_targets.iter()
+        .flat_map(|ivs| ivs.iter().map(|&(r, _, _)| r))
+        .collect();
+
+    // A room qualifies if there exists a time window during which ALL known
+    // targets were simultaneously present in that room.
+    let mut result: Vec<u32> = all_rooms.into_iter().filter(|&room| {
+        // For each known target collect intervals in this room
+        let per_target: Vec<Vec<(u64, u64)>> = known_targets.iter().map(|ivs| {
+            ivs.iter()
+                .filter(|&&(r, _, _)| r == room)
+                .map(|&(_, s, e)| (s, e))
+                .collect()
+        }).collect();
+
+        // Every target must have at least one interval in this room
+        if per_target.iter().any(|v| v.is_empty()) { return false; }
+
+        // Check whether any combination of one interval per target overlaps
+        // i.e. intersection of [start, end) across targets is non-empty.
+        // We try all combinations: overlap_start = max of starts, overlap_end = min of ends.
+        fn overlaps(per_target: &[Vec<(u64, u64)>], idx: usize, win_start: u64, win_end: u64) -> bool {
+            if win_start >= win_end { return false; }
+            if idx == per_target.len() { return true; }
+            for &(s, e) in &per_target[idx] {
+                let new_start = win_start.max(s);
+                let new_end   = win_end.min(e);
+                if overlaps(per_target, idx + 1, new_start, new_end) { return true; }
+            }
+            false
         }
-    }
-    result.sort_by(|a, b| a.1.cmp(&b.1));
+        overlaps(&per_target, 0, 0, u64::MAX)
+    }).collect();
+
+    result.sort_unstable();
     result
 }
 

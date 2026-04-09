@@ -245,3 +245,87 @@ timestamp|E/G|name|A/L|room_or_empty|prev_hash_hex
 Stderr output:
 - `invalid` — bad arguments or illegal state transition
 - `integrity violation` — MAC failure or broken hash chain
+
+---
+
+## Running tests
+
+The test suite calls the compiled binaries as child processes and covers all functionality end-to-end.
+
+### Build first (tests require binaries to exist)
+
+```bash
+cargo build
+```
+
+### Run all tests
+
+```bash
+cargo test
+```
+
+### Run a specific test by name
+
+```bash
+cargo test test_07_room_history
+```
+
+### Run with release binaries
+
+```bash
+cargo build --release
+GALLERY_RELEASE=1 cargo test
+```
+
+### What is tested
+
+| # | Test | What it checks |
+|---|------|----------------|
+| 01–04 | Basic arrivals / departures | Employee/guest enter and leave gallery and state reflects it |
+| 05–06 | Multiple people & rooms | Sorted output, multiple rooms visible in state |
+| 07–09 | Room history | Ordered list of distinct rooms, no duplicates, empty when no rooms entered |
+| 10 | Unknown person history | Exit 111 for a person who never appeared |
+| 11–12 | Intersection | Correct overlap detection, empty when no shared room |
+| 13–19 | Illegal transitions | All invalid state changes rejected with exit 111 |
+| 20–23 | Security | Wrong token, tampered bytes, truncated file → integrity violation |
+| 24–29 | Input validation | Invalid names, tokens, timestamps, conflicting flags |
+| 30–31 | Batch mode | Successful batch, bad lines skipped gracefully |
+| 32–33 | File creation | Log created on first write, empty log gives empty state |
+| 34 | Full scenario | Complete realistic session covering all features |
+
+---
+
+## Interactive demo
+
+The `demo.sh` script walks through every feature interactively with coloured output and pause points between sections.
+
+### Run locally
+
+```bash
+# Build first
+cargo build
+
+# Run demo
+./demo.sh
+```
+
+### Run with Docker
+
+```bash
+# Build image first
+docker build -t gallery-log .
+
+# Run demo
+./demo.sh --docker
+```
+
+### What the demo covers
+
+1. Basic employee and guest arrivals
+2. Entering and leaving rooms
+3. Current state query (`-S`)
+4. Room history query (`-R`)
+5. Intersection query (`-I`)
+6. All illegal transitions — shown rejected one by one
+7. Security — wrong token and byte-flipped tampered log
+8. Batch mode with one intentionally invalid line

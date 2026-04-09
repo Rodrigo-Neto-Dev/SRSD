@@ -129,14 +129,8 @@ fn run_batch(batch_file: &str) {
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
-        // Parse the line as a logappend invocation (without the "logappend" prefix)
-        let parts: Vec<String> = shell_split(line);
-        // Remove leading "logappend" if present
-        let args = if parts.first().map(|s| s.as_str()) == Some("logappend") {
-            parts[1..].to_vec()
-        } else {
-            parts
-        };
+        // Each line contains only the flags/options — no leading "logappend" word.
+        let args: Vec<String> = shell_split(line);
 
         // Each line either succeeds or prints "invalid" but continues
         let a = match parse_args(&args) {
