@@ -1,21 +1,10 @@
 //! Integration tests for gallery-log.
-//!
-//! These tests call the compiled binaries (logappend / logread) as child
-//! processes, exactly as a real user would, and assert on stdout / stderr /
-//! exit-code.  Run with:
-//!
-//!   cargo test
-//!
-//! The binaries must already be compiled:
-//!   cargo build          (debug, used by default)
-//!   cargo build --release (set env GALLERY_RELEASE=1 to use release builds)
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
 fn bin(name: &str) -> PathBuf {
     // Allow CI / release builds via env var
     let profile = if std::env::var("GALLERY_RELEASE").is_ok() { "release" } else { "debug" };

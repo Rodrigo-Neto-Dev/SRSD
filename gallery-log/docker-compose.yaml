@@ -1,12 +1,84 @@
-version: "3.8"
 services:
   gallery-log:
-    build: .
+    build:
+      context: .
+      target: runtime
     image: gallery-log
     volumes:
-      # The project's ./logs folder is mounted to /app/logs inside the container.
-      # Log files written to /app/logs/... will persist on your machine automatically.
       - ./logs:/app/logs
     working_dir: /app
     stdin_open: true
     tty: true
+
+  gallery-test:
+    build:
+      context: .
+      target: builder
+    image: gallery-log-builder
+    environment:
+      - GALLERY_RELEASE=1
+    volumes:
+      - ./logs:/app/logs
+      - cargo-cache:/usr/local/cargo/registry
+    working_dir: /app
+    command: bash -c "cargo build --release && cargo test --release"
+    stdin_open: true
+    tty: true
+
+  gallery-test-specific:
+    build:
+      context: .
+      target: builder
+    image: gallery-log-builder
+    environment:
+      - GALLERY_RELEASE=1
+    volumes:
+      - ./logs:/app/logs
+      - cargo-cache:/usr/local/cargo/registry
+    working_dir: /app
+
+    command: bash -c "cargo build --release && cargo test --release"
+    stdin_open: true
+    tty: true
+
+  gallery-demo:
+    build:
+      context: .
+      target: runtime
+    image: gallery-log
+    volumes:
+      - ./logs:/app/logs
+    working_dir: /app
+    command: ./demo.sh
+    stdin_open: true
+    tty: true
+
+  gallery-dev:
+    build:
+      context: .
+      target: builder
+    image: gallery-log-builder
+    volumes:
+      - ./logs:/app/logs
+      - ./src:/app/src:ro
+      - ./tests:/app/tests:ro
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-target:/app/target
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    entrypoint: /bin/bash
+
+  gallery-reset:
+    build:
+      context: .
+      target: runtime
+    image: gallery-log
+    volumes:
+      - ./logs:/app/logs
+    working_dir: /app
+    command: ./reset.sh
+
+volumes:
+  cargo-cache:
+  cargo-target:

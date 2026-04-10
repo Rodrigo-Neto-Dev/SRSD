@@ -23,8 +23,8 @@ pause()   { echo -e "\n${BOLD}Press ENTER to continue...${RESET}"; read -r; }
 
 # ── Mode: local or docker ──────────────────────────────────────────────────────
 USE_DOCKER=false
-if [[ "${1:-}" == "--docker" ]]; then USE_DOCKER=true; fi
 
+if [[ -f /.dockerenv ]]; then USE_DOCKER=true; fi
 LOG_DIR="$(pwd)/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/demo.log"
@@ -33,19 +33,22 @@ BATCH="$LOG_DIR/demo_batch.txt"
 # Wipe previous demo log so we start clean
 rm -f "$LOG"
 
-run_append() { # args forwarded to logappend
-    if $USE_DOCKER; then
-        docker run --rm -v "${LOG_DIR}:/app/logs" gallery-log ./logappend "$@"
+# ── Mode: detection ────────────────────────────────────────────────────────────
+# Check if we are running inside a Docker container
+
+run_append() {
+    if [ "$USE_DOCKER" = true ]; then
+        ./logappend "$@"
     else
-        ./target/debug/logappend "$@"
+    ./target/debug/logappend "$@"
     fi
 }
 
-run_read() { # args forwarded to logread
-    if $USE_DOCKER; then
-        docker run --rm -v "${LOG_DIR}:/app/logs" gallery-log ./logread "$@"
+run_read() {
+    if [ "$USE_DOCKER" = true ]; then
+        ./logread "$@"
     else
-        ./target/debug/logread "$@"
+    ./target/debug/logread "$@"
     fi
 }
 
@@ -89,18 +92,16 @@ echo -e "${BOLD}║       Gallery Log — Interactive Demo             ║${RESE
 echo -e "${BOLD}╚══════════════════════════════════════════════════╝${RESET}"
 echo ""
 
-if $USE_DOCKER; then
-    say "Mode: Docker"
-    if ! docker image inspect gallery-log &>/dev/null; then
-        echo "Docker image 'gallery-log' not found. Building now..."
-        docker build -t gallery-log .
-    fi
+if [ "$USE_DOCKER" = true ]; then
+    say "Mode: Inside Docker Container"
+elif [[ "${1:-}" == "--docker" ]]; then
+    say "Mode: Docker Host (calling docker run)"
 else
-    say "Mode: local binary (target/debug/)"
-    if [[ ! -f ./target/debug/logappend ]]; then
-        echo "Binaries not found. Running cargo build..."
-        cargo build
-    fi
+  say "Mode: local binary (target/debug/)"
+  if [[ ! -f ./target/debug/logappend ]]; then
+    echo "Binaries not found. Running cargo build..."
+    cargo build
+  fi
 fi
 
 echo ""
@@ -280,10 +281,12 @@ EOF
 cat "$BATCH"
 echo ""
 say "Running batch file:"
-if $USE_DOCKER; then
-    docker run --rm -v "${LOG_DIR}:/app/logs" gallery-log ./logappend -B /app/logs/demo_batch.txt
+say "Running batch file:"
+if [ "$USE_DOCKER" = true ]; then
+    # Inside container, logs are at /app/logs
+    ./logappend -B "/app/logs/demo_batch.txt"
 else
-    ./target/debug/logappend -B "$BATCH"
+  ./target/debug/logappend -B "$BATCH"
 fi
 echo ""
 say "State after batch (line 4 failed silently, rest processed):"

@@ -19,6 +19,9 @@ gallery-log/
   Cargo.toml
   Dockerfile
   docker-compose.yml
+  demo.sh
+  reset.sh
+  makefile
   README.md
 ```
 
@@ -60,7 +63,7 @@ All log file paths should point to the `logs/` folder:
 ./target/release/logread -K secret -S logs/log1
 ```
 
-On Windows use backslashes and the `.exe` extension:
+ If it does not work on Windows use backslashes and the `.exe` extension:
 
 ```powershell
 .\target\release\logappend.exe -T 1 -K secret -A -E Alice logs\log1
@@ -81,60 +84,130 @@ The `logs/` folder in your project is automatically mounted into the container, 
 
 ### 1. Open a terminal and navigate to the project folder
 
-```bash
-cd path/to/gallery-log
-```
-
-> **Windows (PowerShell):**
-> ```powershell
-> cd C:\Users\yourname\path\to\gallery-log
-> ```
-
-This step is important — all Docker commands must be run from this folder so that Docker can find the `Dockerfile` and mount the `logs/` folder correctly.
-
-### 2. Build the Docker image
 
 ```bash
-docker build -t gallery-log .
+# 1. Build everything
+make build
+
+# 2. Run tests
+make test
+
+# 3. Try the demo
+make demo
+
+# 4. Clean up
+make reset
 ```
 
-The `.` at the end means "use the current folder as the build context". Run this once, or again whenever you change the source code.
+### Available Commands
 
-### 3. Run the programs
+| Command                             | Description |
+|-------------------------------------|-------------|
+| `make build`                        | Build all Docker images |
+| `make build-runtime`                | Build only runtime image (faster) |
+| `make test`                         | Run all tests in Docker |
+| `make test-specific TEST=test_name` | Run a specific test |
+| `make demo`                         | Run interactive demo |
+| `make reset`                        | Clear all log files |
+| `make shell`                        | Open bash shell in container |
+| `make dev`                          | Open dev shell with Rust/cargo |
+| `make clean`                        | Remove logs and containers |
+| `make clean-all`                    | Remove everything including images |
+| `make rebuild`                      | Clean everything and rebuild |
+| `local-build`                       | Build locally with cargo|
+| `local-test`                        | Run tests locally|
+| `local-demo`                        | Run demo locally|
+| `local-clean`                       | Clean local build artifacts|
 
-#### Using `docker run` directly
+
+
+### Running Specific Tests
 
 ```bash
-# Employee Alice arrives at gallery
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logappend -T 1 -K secret -A -E Alice logs/log1
+# Run a single test
+make test-specific TEST=test_07_room_history
 
-# Alice enters room 1
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logappend -T 2 -K secret -A -E Alice -R 1 logs/log1
+# Run tests matching a pattern
+make test-specific TEST=test_1
 
-# Guest Bob arrives at gallery
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logappend -T 3 -K secret -A -G Bob logs/log1
-
-# Alice leaves room 1
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logappend -T 4 -K secret -L -E Alice -R 1 logs/log1
-
-# Alice leaves gallery
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logappend -T 5 -K secret -L -E Alice logs/log1
-
-# Read current state
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log \
-  ./logread -K secret -S logs/log1
+# Run tests with output
+docker-compose run --rm gallery-test-specific cargo test test_07_room_history -- --nocapture
 ```
 
-> **Windows (PowerShell):** replace `${PWD}` with `${PWD}` — PowerShell supports this natively. If it does not work, use the full path:
-> ```powershell
-> docker run --rm -v "C:\Users\yourname\path\to\gallery-log\logs:/app/logs" gallery-log ./logappend -T 1 -K secret -A -E Alice logs/log1
-> ```
+### Direct Docker Commands (without make)
 
+```bash
+# Build
+docker-compose build
+
+# Run all tests
+docker-compose run --rm gallery-test
+
+# Run specific test
+docker-compose run --rm gallery-test-specific cargo test test_07_room_history
+
+# Run demo
+docker-compose run --rm gallery-demo
+
+# Interactive shell
+docker-compose run --rm gallery-log /bin/bash
+
+# Reset logs
+docker-compose run --rm gallery-reset
+```
+
+### Manual Testing Examples
+
+```bash
+# Create a test scenario
+docker-compose run --rm gallery-log ./logappend -T 1 -K secret -A -E Alice logs/test.log
+docker-compose run --rm gallery-log ./logappend -T 2 -K secret -A -E Alice -R 1 logs/test.log
+docker-compose run --rm gallery-log ./logread -K secret -S logs/test.log
+
+# Expected output:
+# Alice
+# 
+# 1: Alice
+```
+
+### Windows PowerShell
+
+```powershell
+# Build
+docker-compose build
+
+# Run tests
+docker-compose run --rm gallery-test
+
+# Run demo
+docker-compose run --rm gallery-demo
+
+# Using make (if installed via Chocolatey)
+make build
+make test
+make demo
+```
+
+### Troubleshooting
+
+**Tests fail with "binary not found"**
+```bash
+# Ensure target directory is mounted
+docker-compose run --rm -v ${PWD}/target:/app/target gallery-test
+```
+
+**Permission denied on logs/**
+```bash
+# Reset permissions (Linux/Mac)
+sudo chown -R $USER:$USER logs/
+```
+
+**Clean rebuild**
+```bash
+make rebuild
+``` 
+
+---
 #### Using docker-compose (simpler for repeated use)
 
 ```bash
@@ -159,9 +232,9 @@ The `logs/` mount is configured automatically by `docker-compose.yml` — no ext
 Create a batch file, for example `logs/batch.txt`:
 
 ```
-logappend -T 1 -K secret -A -E Alice logs/log1
-logappend -T 2 -K secret -A -G Bob logs/log1
-logappend -T 3 -K secret -A -E Alice -R 1 logs/log1
+-T 1 -K secret -A -E Alice logs/log1
+-T 2 -K secret -A -G Bob logs/log1
+-T 3 -K secret -A -E Alice -R 1 logs/log1
 ```
 
 Run it:
@@ -170,8 +243,8 @@ Run it:
 # Locally
 ./target/release/logappend -B logs/batch.txt
 
-# Docker
-docker run --rm -v "${PWD}/logs:/app/logs" gallery-log ./logappend -B logs/batch.txt
+# Docker (while running)
+logappend -B logs/batch.txt
 ```
 
 ---
@@ -205,13 +278,12 @@ Shows which rooms a person has visited, in order of first visit.
 
 ### Intersection (`-I`)
 
-Shows all people who were ever in the same room at the same time as all listed persons.
+Shows rooms where all mentioned people have been at the same time.
 
 ```bash
 ./logread -K secret -I -E Alice -G Bob logs/log1
 ```
 
----
 
 ## Security design
 
