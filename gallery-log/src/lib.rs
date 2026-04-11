@@ -15,9 +15,9 @@ pub fn derive_key(token: &str) -> [u8; 32] {
     h.finalize().into()
 }
 
-// ── Stream cipher  keystream = SHA256(K || counter) ──────────────────────────
+// ── Stream cipher  keystream = SHA256(K || nonce || counter) ────────────────
 
-pub fn stream_cipher(key: &[u8; 32], data: &[u8]) -> Vec<u8> {
+pub fn stream_cipher(key: &[u8; 32], nonce: &[u8; 32], data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len());
     let mut counter: u64 = 0;
     let mut ks: Vec<u8> = Vec::new();
@@ -26,6 +26,7 @@ pub fn stream_cipher(key: &[u8; 32], data: &[u8]) -> Vec<u8> {
         if ks_off >= ks.len() {
             let mut h = Sha256::new();
             h.update(key);
+            h.update(nonce);
             h.update(counter.to_le_bytes());
             ks = h.finalize().to_vec();
             ks_off = 0;
@@ -158,7 +159,7 @@ pub fn load_log(path: &str, key: &[u8; 32]) -> Result<LoadedLog, LogError> {
     while off < buf.len() {
         let (ct, mac, next) = unpack_record(&buf, off).ok_or(LogError::Integrity)?;
         if compute_mac(key, &ct) != mac { return Err(LogError::Integrity); }
-        let plain = stream_cipher(key, &ct);
+        let plain = stream_cipher(key, &prev_hash, &ct);
         let (entry, stored_prev) = LogEntry::decode(&plain).ok_or(LogError::Integrity)?;
         if stored_prev != prev_hash { return Err(LogError::Integrity); }
         prev_hash = hash_bytes(&ct);
@@ -173,7 +174,7 @@ pub fn load_log(path: &str, key: &[u8; 32]) -> Result<LoadedLog, LogError> {
 
 pub fn append_entry(path: &str, key: &[u8; 32], entry: &LogEntry, prev_hash: &[u8; 32]) -> io::Result<()> {
     let plain = entry.encode(prev_hash);
-    let ct = stream_cipher(key, &plain);
+    let ct = stream_cipher(key, prev_hash, &plain);
     let mac = compute_mac(key, &ct);
     let record = pack_record(&ct, &mac);
     let mut f = OpenOptions::new().create(true).append(true).open(path)?;
