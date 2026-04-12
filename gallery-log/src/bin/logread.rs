@@ -99,6 +99,9 @@ fn main() {
     let args = parse_args(&raw).unwrap_or_else(|_| invalid());
     let key = derive_key(&args.token);
 
+    // Shared lock: multiple readers can proceed, but blocks during a write
+    let _lock = lock_log_shared(&args.log_path).unwrap_or_else(|_| invalid());
+
     let log = match load_log(&args.log_path, &key) {
         Ok(l) => l,
         Err(LogError::Integrity) => integrity(),

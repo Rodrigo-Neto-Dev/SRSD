@@ -150,6 +150,7 @@ dependencies = [
  "clap",
  "hex",
  "hmac",
+ "libc",
  "sha2",
 ]
 

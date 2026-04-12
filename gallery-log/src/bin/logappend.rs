@@ -100,13 +100,15 @@ fn run_single(args: &[String]) {
     let a = parse_args(args).unwrap_or_else(|_| invalid());
     let key = derive_key(&a.token);
 
+    // Hold exclusive lock for the entire load → validate → append sequence
+    let _lock = lock_log_exclusive(&a.log_path).unwrap_or_else(|_| invalid());
+
     let log = match load_log(&a.log_path, &key) {
         Ok(l) => l,
         Err(LogError::Integrity) => integrity(),
         Err(LogError::Io(_)) => invalid(),
     };
 
-    // Rebuild state to validate transition
     let mut state = compute_state(&log.entries).unwrap_or_else(|_| integrity());
 
     let entry = LogEntry {
@@ -122,31 +124,55 @@ fn run_single(args: &[String]) {
     }
 
     append_entry(&a.log_path, &key, &entry, &log.last_hash).unwrap_or_else(|_| invalid());
+    // _lock dropped here, releasing the exclusive lock
 }
 
 fn run_batch(batch_file: &str) {
     let content = fs::read_to_string(batch_file).unwrap_or_else(|_| invalid());
+
+    // Cache: (log_path, key) → (state, last_hash, lock_handle)
+    // Load + validate once per log/key combination, then apply incrementally.
+    let mut cache: Option<(String, [u8; 32], GalleryState, [u8; 32], std::fs::File)> = None;
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
-        // Each line contains only the flags/options — no leading "logappend" word.
         let args: Vec<String> = shell_split(line);
 
-        // Each line either succeeds or prints "invalid" but continues
         let a = match parse_args(&args) {
             Ok(a) => a,
             Err(_) => { eprintln!("invalid"); continue; }
         };
         let key = derive_key(&a.token);
-        let log = match load_log(&a.log_path, &key) {
-            Ok(l) => l,
-            Err(LogError::Integrity) => { eprintln!("integrity violation"); continue; }
-            Err(LogError::Io(_)) => { eprintln!("invalid"); continue; }
+
+        // Check if we can reuse the cached state or need to reload
+        let cache_hit = match &cache {
+            Some((path, k, _, _, _)) => *path == a.log_path && *k == key,
+            None => false,
         };
-        let mut state = match compute_state(&log.entries) {
-            Ok(s) => s,
-            Err(_) => { eprintln!("integrity violation"); continue; }
-        };
+
+        if !cache_hit {
+            // Drop old lock before acquiring a new one
+            drop(cache.take());
+
+            let lock = match lock_log_exclusive(&a.log_path) {
+                Ok(f) => f,
+                Err(_) => { eprintln!("invalid"); continue; }
+            };
+            let log = match load_log(&a.log_path, &key) {
+                Ok(l) => l,
+                Err(LogError::Integrity) => { eprintln!("integrity violation"); continue; }
+                Err(LogError::Io(_)) => { eprintln!("invalid"); continue; }
+            };
+            let state = match compute_state(&log.entries) {
+                Ok(s) => s,
+                Err(_) => { eprintln!("integrity violation"); continue; }
+            };
+            cache = Some((a.log_path.clone(), key, state, log.last_hash, lock));
+        }
+
+        let (_, _, ref mut state, ref mut last_hash, _) = cache.as_mut().unwrap();
+
         let entry = LogEntry {
             timestamp: a.timestamp,
             person_type: a.person_type,
@@ -158,8 +184,9 @@ fn run_batch(batch_file: &str) {
             eprintln!("invalid");
             continue;
         }
-        if append_entry(&a.log_path, &key, &entry, &log.last_hash).is_err() {
-            eprintln!("invalid");
+        match append_entry(&a.log_path, &key, &entry, last_hash) {
+            Ok(new_hash) => { *last_hash = new_hash; }
+            Err(_) => { eprintln!("invalid"); }
         }
     }
 }

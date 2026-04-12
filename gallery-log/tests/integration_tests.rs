@@ -1,6 +1,7 @@
 //! Integration tests for gallery-log.
 
 use std::fs;
+use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -632,4 +633,100 @@ fn test_37_intersection_no_concurrent_overlap() {
     let o = logread(&["-K", "secret", "-I", "-E", "Alice", "-G", "Bob", &log]);
     let out = stdout(&o).trim().to_string();
     assert!(out.is_empty(), "no concurrent overlap — should be empty: '{}'", out);
+}
+
+// ── 12. Symlink rejection (O_NOFOLLOW) ───────────────────────────────────────
+
+#[test]
+fn test_38_symlink_append_rejected() {
+    let real_log = tmp_log("t38_real");
+    let symlink_log = tmp_log("t38_sym");
+    cleanup(&real_log);
+    cleanup(&symlink_log);
+
+    // Create a real file, then a symlink pointing to it
+    fs::write(&real_log, b"").unwrap();
+    unix_fs::symlink(&real_log, &symlink_log).unwrap();
+
+    // Appending via the symlink path should fail (O_NOFOLLOW returns ELOOP)
+    let o = logappend(&["-T", "1", "-K", "secret", "-A", "-E", "Alice", &symlink_log]);
+    assert!(!o.status.success(), "append through symlink should be rejected");
+
+    cleanup(&symlink_log);
+    cleanup(&real_log);
+}
+
+#[test]
+fn test_39_symlink_read_rejected() {
+    let real_log = tmp_log("t39_real");
+    let symlink_log = tmp_log("t39_sym");
+    cleanup(&real_log);
+    cleanup(&symlink_log);
+
+    // Create a valid log at the real path
+    let o = logappend(&["-T", "1", "-K", "secret", "-A", "-E", "Alice", &real_log]);
+    assert!(o.status.success(), "append to real file should work");
+
+    // Create a symlink to the real log
+    unix_fs::symlink(&real_log, &symlink_log).unwrap();
+
+    // Reading via the symlink path should fail
+    let o = logread(&["-K", "secret", "-S", &symlink_log]);
+    assert!(!o.status.success(), "read through symlink should be rejected");
+
+    cleanup(&symlink_log);
+    cleanup(&real_log);
+}
+
+// ── 13. Concurrent append (flock serialisation) ──────────────────────────────
+
+#[test]
+fn test_40_concurrent_appends_serialised() {
+    let log = tmp_log("t40");
+    cleanup(&log);
+    let lock_file = format!("{}.lock", log);
+    let _ = fs::remove_file(&lock_file);
+
+    // Seed the log with one entry so the file exists
+    let o = logappend(&["-T", "1", "-K", "secret", "-A", "-E", "Seed", &log]);
+    assert!(o.status.success(), "seed append failed");
+
+    // Spawn 10 concurrent logappend processes, each adding a different guest.
+    // All use the SAME timestamp so that whichever order they serialise in,
+    // only the first can succeed (the rest fail the "timestamp must increase"
+    // check).  The key invariant is that the hash chain is never corrupted —
+    // without flock, two writers could interleave and break the chain.
+    let names = ["Ada", "Bea", "Cal", "Dan", "Eve", "Fay", "Gil", "Hal", "Ivy", "Jan"];
+    let mut children = Vec::new();
+    for name in &names {
+        let child = Command::new(bin("logappend"))
+            .args(&["-T", "2", "-K", "secret", "-A", "-G", name, &log])
+            .spawn()
+            .expect("failed to spawn logappend");
+        children.push(child);
+    }
+
+    let mut successes = 0u32;
+    for mut c in children {
+        let status = c.wait().expect("failed to wait");
+        if status.success() { successes += 1; }
+    }
+
+    // Exactly one process should win the race (same timestamp means only the
+    // first writer succeeds; the rest see the timestamp is no longer fresh).
+    assert_eq!(successes, 1,
+        "exactly one concurrent append should succeed with the same timestamp");
+
+    // The critical invariant: the log must pass integrity validation.
+    // Without locking, concurrent writers would corrupt the hash chain.
+    let o = logread(&["-K", "secret", "-S", &log]);
+    assert!(o.status.success(),
+        "log must pass integrity check after concurrent appends: {}",
+        stderr(&o));
+
+    // Verify the seed entry survived
+    let out = stdout(&o);
+    assert!(out.contains("Seed"), "seed entry must be present");
+
+    let _ = fs::remove_file(&lock_file);
 }

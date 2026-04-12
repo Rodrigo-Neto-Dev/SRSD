@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
+use std::os::unix::io::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -82,24 +84,25 @@ impl LogEntry {
         let pt = match self.person_type { PersonType::Employee => "E", PersonType::Guest => "G" };
         let act = match self.action { Action::Arrival => "A", Action::Departure => "L" };
         let room_s = self.room.map(|r| r.to_string()).unwrap_or_default();
-        format!("{}|{}|{}|{}|{}|{}", self.timestamp, pt, self.name, act, room_s, hex::encode(prev_hash))
-            .into_bytes()
+        let mut out = format!("{}|{}|{}|{}|{}", self.timestamp, pt, self.name, act, room_s)
+            .into_bytes();
+        out.extend_from_slice(prev_hash); // raw 32 bytes, no hex encoding
+        out
     }
 
     pub fn decode(data: &[u8]) -> Option<(Self, [u8; 32])> {
-        let s = std::str::from_utf8(data).ok()?;
-        let mut it = s.splitn(6, '|');
+        if data.len() < 32 { return None; }
+        let (text_part, hash_part) = data.split_at(data.len() - 32);
+        let mut prev_hash = [0u8; 32];
+        prev_hash.copy_from_slice(hash_part);
+        let s = std::str::from_utf8(text_part).ok()?;
+        let mut it = s.splitn(5, '|');
         let timestamp = it.next()?.parse::<u64>().ok()?;
         let pt = match it.next()? { "E" => PersonType::Employee, "G" => PersonType::Guest, _ => return None };
         let name = it.next()?.to_owned();
         let action = match it.next()? { "A" => Action::Arrival, "L" => Action::Departure, _ => return None };
         let room_s = it.next()?;
         let room = if room_s.is_empty() { None } else { Some(room_s.parse::<u32>().ok()?) };
-        let prev_hex = it.next()?;
-        let prev_bytes = hex::decode(prev_hex).ok()?;
-        if prev_bytes.len() != 32 { return None; }
-        let mut prev_hash = [0u8; 32];
-        prev_hash.copy_from_slice(&prev_bytes);
         Some((LogEntry { timestamp, person_type: pt, name, action, room }, prev_hash))
     }
 }
@@ -148,7 +151,10 @@ pub fn load_log(path: &str, key: &[u8; 32]) -> Result<LoadedLog, LogError> {
     if !Path::new(path).exists() {
         return Ok(LoadedLog { entries: vec![], last_hash: [0u8; 32] });
     }
-    let mut f = File::open(path)?;
+    let mut f = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
 
@@ -172,14 +178,18 @@ pub fn load_log(path: &str, key: &[u8; 32]) -> Result<LoadedLog, LogError> {
 
 // ── Append ────────────────────────────────────────────────────────────────────
 
-pub fn append_entry(path: &str, key: &[u8; 32], entry: &LogEntry, prev_hash: &[u8; 32]) -> io::Result<()> {
+pub fn append_entry(path: &str, key: &[u8; 32], entry: &LogEntry, prev_hash: &[u8; 32]) -> io::Result<[u8; 32]> {
     let plain = entry.encode(prev_hash);
     let ct = stream_cipher(key, prev_hash, &plain);
     let mac = compute_mac(key, &ct);
     let record = pack_record(&ct, &mac);
-    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
     f.write_all(&record)?;
-    Ok(())
+    Ok(hash_bytes(&ct))
 }
 
 // ── Gallery state machine ─────────────────────────────────────────────────────
@@ -346,6 +356,39 @@ pub fn intersection_query(
 
     result.sort_unstable();
     result
+}
+
+// ── File locking ─────────────────────────────────────────────────────────────
+
+/// Acquire an exclusive lock on a companion `.lock` file.
+/// Returns the lock file handle — the lock is held until the handle is dropped.
+pub fn lock_log_exclusive(path: &str) -> io::Result<File> {
+    let lock_path = format!("{}.lock", path);
+    let f = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(f)
+}
+
+/// Acquire a shared lock on a companion `.lock` file.
+pub fn lock_log_shared(path: &str) -> io::Result<File> {
+    let lock_path = format!("{}.lock", path);
+    let f = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    let rc = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_SH) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(f)
 }
 
 // ── Validation helpers ────────────────────────────────────────────────────────
