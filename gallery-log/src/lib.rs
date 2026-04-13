@@ -339,7 +339,7 @@ pub fn intersection_query(
         if per_target.iter().any(|v| v.is_empty()) { return false; }
 
         // Check whether any combination of one interval per target overlaps
-        // i.e. intersection of [start, end) across targets is non-empty.
+        // i.e. intersection of (start, end) across targets is non-empty.
         // We try all combinations: overlap_start = max of starts, overlap_end = min of ends.
         fn overlaps(per_target: &[Vec<(u64, u64)>], idx: usize, win_start: u64, win_end: u64) -> bool {
             if win_start >= win_end { return false; }

@@ -27,7 +27,7 @@ gallery-log/
 
 ---
 
-## Option A — Run locally (Rust installed)
+## Option A — Run locally (Rust installed) -> Not Windows!
 
 ### 1. Navigate to the project folder
 
@@ -62,17 +62,9 @@ All log file paths should point to the `logs/` folder:
 # Read current state
 ./target/release/logread -K secret -S logs/log1
 ```
-
- If it does not work on Windows use backslashes and the `.exe` extension:
-
-```powershell
-.\target\release\logappend.exe -T 1 -K secret -A -E Alice logs\log1
-.\target\release\logread.exe -K secret -S logs\log1
-```
-
 ---
 
-## Option B — Run with Docker (no local Rust required)
+## Option B — Run with Docker (no local Rust required works with windows)
 
 The Dockerfile uses a **multi-stage build**:
 1. **Stage 1** (`rust:latest`) — compiles the project
@@ -119,6 +111,12 @@ make reset
 | `local-demo`                        | Run demo locally|
 | `local-clean`                       | Clean local build artifacts|
 
+---
+## Recommended actions:
+Use only docker and the non-local make commands
+Use make demo to take a look at the demo
+Use the make dev to have acess to everything (use ls for context if needed)
+Running commands in that dev shell will be similar to running them locally (see above 3. Run)
 
 
 ### Running Specific Tests

@@ -22,7 +22,7 @@ section() { echo -e "\n${YELLOW}${BOLD}═════════════�
 pause()   { echo -e "\n${BOLD}Press ENTER to continue...${RESET}"; read -r; }
 
 # ── Mode: local or docker ──────────────────────────────────────────────────────
-USE_DOCKER=false
+USE_DOCKER=true
 
 if [[ -f /.dockerenv ]]; then USE_DOCKER=true; fi
 LOG_DIR="$(pwd)/logs"
