@@ -23,7 +23,7 @@
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{Segurança de Redes e Sistemas Distribuídos - 2026}
-\fancyhead[R]{\includegraphics[height=1.5cm]{logo.png}}
+\fancyhead[R]{\IfFileExists{logo.png}{\includegraphics[height=1.5cm]{logo.png}}{}}
 \fancyfoot[C]{\thepage}
 \setlength{\headheight}{45pt}
 \setlength{\headsep}{20pt}
@@ -43,7 +43,7 @@
 
 \begin{titlepage}
     \centering
-    \includegraphics[width=3cm]{logo.png}\par\vspace{1cm}
+    \IfFileExists{logo.png}{\includegraphics[width=3cm]{logo.png}\par\vspace{1cm}}{}
     \vspace*{1cm}
     {\Large \textbf{Faculdade de Ciências da Universidade de Lisboa}}\\[0.5em]
     \vspace{4cm}
@@ -76,10 +76,9 @@ We assume the adversary has full read/write access to the log file on disk but d
 \subsection{Design Decisions}
 Key management is kept simple by deriving a single key from the authentication token: one SHA-256 derivation produces the 32-byte key used for both encryption and MAC computation. This means an incorrect token immediately produces a wrong key, causing the first MAC check to fail and preventing any unauthorized access to the log's contents.
 Confidentiality is achieved by encrypting every record with a stream cipher before it is written to disk. The ciphertext is then protected using an Encrypt-then-MAC composition with HMAC-SHA-256, meaning each record is authenticated before decryption. This ordering prevents chosen-ciphertext manipulation and ensures that no plaintext is ever processed from a tampered record.
-To enforce ordering and prevent insertion or reordering, we use a hash chain: each record's ciphertext is hashed, and that hash is embedded in the next record's plaintext as both a chain link and a unique nonce for the stream cipher. Any modification to the sequence, whether reordering, inserting, or silently deleting records in the middle, breaks the chain and is detected on the next read. Chaining also improves performance as we don't have to decipher and cipher to whole file content on each write/read, we only need to append the next log to the file (although we do end up checking the whole file for integrity, which could be improved, see \ref{known_limitations})
+To enforce ordering and prevent insertion or reordering, we use a hash chain: each record's ciphertext is hashed, and that hash is embedded in the next record's plaintext as both a chain link and a unique nonce for the stream cipher. Any modification to the sequence, whether reordering, inserting, or silently deleting records in the middle, breaks the chain and is detected on the next read. Chaining also keeps writes incremental: an append only needs to encrypt and authenticate the new record rather than rewriting the whole file, though reads still have to walk the full chain to validate integrity (see \ref{known_limitations}).
 Logical consistency is enforced through a state machine that replays every entry in sequence. The state machine rejects impossible transitions such as double arrivals, departures from the wrong room, or leaving when not present, and requires strictly increasing timestamps to prevent replay of old commands.
-This design means that every append requires a full-chain validation, resulting in O(n)O(n)
-O(n) reads per operation. We accept this trade-off because it guarantees both integrity and state consistency on every write. Batch mode amortises the cost by validating the chain once and then appending the entries incrementally.
+This design means that every append requires a full-chain validation, resulting in $O(n)$ reads per operation. We accept this trade-off because it guarantees both integrity and state consistency on every write. Batch mode amortises the cost by validating the chain once and then appending the entries incrementally.
 
 \subsubsection{Known Limitations} \label{known_limitations}
 Log truncation and rollback to an older file version remain undetectable, as there is no out-of-band anchor for the current chain tip. Mitigating this would require a companion checkpoint file or an external counter, which falls outside the scope of this implementation. Token leakage through command-line arguments and process memory is inherited from the specification's requirement to pass the token via a \texttt{-K} flag and is accepted as a known limitation. Additionally, while the token is hashed through SHA-256 before use, no password-stretching algorithm such as Argon2 or PBKDF2 is applied, meaning a weak token could be brute-forced offline by MAC-checking candidates against the first record.
@@ -119,7 +118,7 @@ The \textbf{Length} field (4 bytes) is a big-endian \texttt{u32} encoding the si
 % ===========================================================================
 
 \subsection{Cryptographic Primitives}
-The entire cryptographic scheme is built from a single primitive: SHA-256. Key derivation consists of a single-pass SHA-256 over the ASCII token, producing the 32-byte key KKK used for both encryption and MAC computation, analogous to a simplified HKDF-Extract without a salt. Encryption uses a custom CTR-mode stream cipher where each keystream block iii is computed as SHA-256(K\|\|nonce\|\|iK \| \text{nonce} \| iK\|\|nonce\|\|i), with the nonce set to the previous record's \texttt{prev\_hash} (32 bytes) and iii encoded as a 64-bit little-endian counter. This is behaviorally equivalent to AES-CTR but uses SHA-256 as the pseudorandom function. Message authentication uses standard HMAC-SHA-256 applied to the ciphertext under the Encrypt-then-MAC paradigm, ensuring that ciphertext has not been tampered with before decryption is attempted. Finally, the chain hash is computed as SHA-256 of each record's ciphertext, which becomes the \texttt{prev\_hash} for the next record, creating a hash chain analogous to a Merkle chain where each record commits to the full history before it.
+The entire cryptographic scheme is built from a single primitive: SHA-256. Key derivation consists of a single-pass SHA-256 over the ASCII token, producing the 32-byte key $K$ used for both encryption and MAC computation. Encryption uses a custom CTR-mode stream cipher where each keystream block $i$ is computed as $\text{SHA-256}(K \| \text{nonce} \| i)$, with the nonce set to the previous record's \texttt{prev\_hash} (32 bytes) and $i$ encoded as a 64-bit little-endian counter. This is behaviorally equivalent to AES-CTR but uses SHA-256 as the pseudorandom function. Message authentication uses standard HMAC-SHA-256 applied to the ciphertext under the Encrypt-then-MAC paradigm, ensuring that ciphertext has not been tampered with before decryption is attempted. Finally, the chain hash is computed as SHA-256 of each record's ciphertext, which becomes the \texttt{prev\_hash} for the next record, creating a hash chain analogous to a Merkle chain where each record commits to the full history before it.
 
 \begin{table}[H]
 \centering
@@ -127,21 +126,17 @@ The entire cryptographic scheme is built from a single primitive: SHA-256. Key d
 \toprule
 \textbf{Primitive} & \textbf{Construction} & \textbf{Output size} \\
 \midrule
-Key derivation & SHA-256(token) & 32 bytes \\
-Stream cipher & CTR mode via SHA-256(K\|\|nonce\|\|ctrK \| \text{nonce} \| \text{ctr}
-K\|\|nonce\|\|ctr) & 32 bytes/block \\
-MAC & HMAC-SHA-256(KK
-K, ciphertext) & 32 bytes \\
-Chain hash & SHA-256(ciphertext) & 32 bytes \\
+Key derivation & $\text{SHA-256}(\text{token})$ & 32 bytes \\
+Stream cipher & $\text{SHA-256}(K \| \text{nonce} \| \text{ctr})$ & 32 bytes/block \\
+MAC & $\text{HMAC-SHA-256}(K, \text{ciphertext})$ & 32 bytes \\
+Chain hash & $\text{SHA-256}(\text{ciphertext})$ & 32 bytes \\
 \bottomrule
 \end{tabular}
 \caption{Cryptographic primitives and their parameters}
 \end{table}
 
 \subsection{Keystream Generation}
-The stream cipher generates keystream in 32-byte blocks by evaluating SHA-256(K\|\|nonce\|\|iK \| \text{nonce} \| i
-K\|\|nonce\|\|i) for successive counter values i=0,1,2,…i = 0, 1, 2, \ldots
-i=0,1,2,… The plaintext is XOR'd with the concatenated keystream byte-by-byte. Since plaintext lengths are not generally a multiple of 32, the final block is truncated: only the bytes needed to cover the remaining plaintext are used, and the rest of the keystream block is discarded.
+The stream cipher generates keystream in 32-byte blocks by evaluating $\text{SHA-256}(K \| \text{nonce} \| i)$ for successive counter values $i = 0, 1, 2, \ldots$ The plaintext is XOR'd with the concatenated keystream byte-by-byte. Since plaintext lengths are not generally a multiple of 32, the final block is truncated: only the bytes needed to cover the remaining plaintext are used, and the rest of the keystream block is discarded.
 
 \begin{figure}[H]
 \centering
@@ -155,8 +150,7 @@ i=0,1,2,… The plaintext is XOR'd with the concatenated keystream byte-by-byte.
     arr/.style={-{Stealth[length=2.5mm]}, thick},
 ]
     % Block 0
-    \node[input] (in0) {K\|\|nonce\|\|0K \| \text{nonce} \| 0
-K\|\|nonce\|\|0};
+    \node[input] (in0) {$K \| \text{nonce} \| 0$};
     \node[prf, below=0.3cm of in0] (prf0) {SHA-256};
     \node[ks, below=0.3cm of prf0] (ks0) {KS block 0 (32B)};
 
@@ -168,16 +162,15 @@ K\|\|nonce\|\|0};
 % Block 2 (truncated)
 \node[input, right=1.5cm of in1] (in2) {$K \| \text{nonce} \| 2$};
 \node[prf, below=0.3cm of in2] (prf2) {SHA-256};
-\node[kstrunc, below left=0.3cm and -0.3cm of prf2] (ks2) {used};
-\node[discard, right=0cm of ks2] (disc) {discarded};
+\node[kstrunc, anchor=north east] (ks2) at ([yshift=-0.3cm]prf2.south) {used};
+\node[discard, anchor=north west] (disc) at ([yshift=-0.3cm]prf2.south) {discarded};
 
 \draw[arr] (in0) -- (prf0);
 \draw[arr] (prf0) -- (ks0);
 \draw[arr] (in1) -- (prf1);
 \draw[arr] (prf1) -- (ks1);
 \draw[arr] (in2) -- (prf2);
-\draw[arr] (prf2.south) -- ++(0,-0.3) -| (ks2.north);
-\draw[arr] (prf2.south) -- ++(0,-0.3) -| (disc.north);
+\draw[arr] (prf2) -- (ks2.north east);
 
 % XOR line
 \node[below=0.6cm of ks0] (xor0) {$\oplus$};
@@ -195,163 +188,95 @@ K\|\|nonce\|\|0};
 \end{tikzpicture}
 \caption{Keystream generation in CTR mode. Each block produces 32 bytes of keystream via SHA-256. The final block is truncated to match the remaining plaintext length; unused bytes are discarded.}
 \end{figure}
-Nonce reuse is prevented by construction: each record uses a unique \texttt{prev_hash} derived from the previous record's ciphertext, so no two records share the same nonce and keystreams are never repeated across records.
-\subsection{Protocol Description --- Append}
+Within a single log, nonce reuse is prevented by construction: every record beyond the first uses a \texttt{prev\_hash} derived from the previous record's ciphertext, so no two records share the same nonce and keystreams are never repeated. The genesis record is a deliberate exception --- it uses the all-zero anchor as its nonce, which is discussed in \S\ref{sec:intentional-vuln}.
+\subsection{Protocol Descriptions --- Append and Verification}
 \begin{figure}[H]
 \centering
+\begin{subfigure}[t]{0.48\textwidth}
+\centering
 \begin{tikzpicture}[
-    node distance=0.6cm and 1.5cm,
-    box/.style={rectangle, draw, rounded corners, minimum width=4.5cm, minimum height=0.8cm, align=center, fill=blue!8},
-    data/.style={rectangle, draw, minimum width=3cm, minimum height=0.6cm, align=center, fill=yellow!15},
+    node distance=0.45cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=6cm, minimum height=0.9cm, align=center, fill=blue!8, font=\footnotesize},
     arr/.style={-{Stealth[length=3mm]}, thick},
 ]
-    \node[box] (kd) {1. Key derivation\\K=SHA-256(token)K = \text{SHA-256}(\text{token})
-K=SHA-256(token)};
-    \node[box, below=of kd] (load) {2. Load \& validate full chain\\verify MAC + chain for every record};
-    \node[box, below=of load] (state) {3. Rebuild gallery state\\replay all entries through state machine};
-    \node[box, below=of state] (encode) {4. Encode plaintext\\P=fields\|\|prev_hashP = \text{fields} \| \text{prev\_hash}
-P=fields\|\|prev_hash};
-    \node[box, below=of encode] (enc) {5. Encrypt\\C=P⊕SHA-256(K\|\|prev_hash\|\|ctr)C = P \oplus \text{SHA-256}(K \| \text{prev\_hash} \| \text{ctr})
-C=P⊕SHA-256(K\|\|prev_hash\|\|ctr)};
-    \node[box, below=of enc] (mac) {6. Compute MAC\\T=HMAC-SHA-256(K,C)T = \text{HMAC-SHA-256}(K, C)
-T=HMAC-SHA-256(K,C)};
-    \node[box, below=of mac] (pack) {7. Pack \& write\\[len(C)] [C] [T][\text{len}(C)]\ [C]\ [T]
-[len(C)] [C] [T] appended to file};
-
-\draw[arr] (kd) -- (load);
-\draw[arr] (load) -- (state);
-\draw[arr] (state) -- (encode);
-\draw[arr] (encode) -- (enc);
-\draw[arr] (enc) -- (mac);
-\draw[arr] (mac) -- (pack);
-
-\node[data, right=2cm of kd] (key) {$K$: 32 bytes};
-\node[data, right=2cm of load] (lh) {\texttt{prev\_hash}: 32 bytes};
-\node[data, right=2cm of enc] (ct) {$C$: variable};
-\node[data, right=2cm of mac] (tag) {$T$: 32 bytes};
-
-\draw[->, dashed, gray] (kd) -- (key);
-\draw[->, dashed, gray] (load) -- (lh);
-\draw[->, dashed, gray] (enc) -- (ct);
-\draw[->, dashed, gray] (mac) -- (tag);
+    \node[box] (kd) {1. Derive key\\$K = \text{SHA-256}(\text{token})$};
+    \node[box, below=of kd] (load) {2. Load \& verify full chain\\MAC + link check per record};
+    \node[box, below=of load] (state) {3. Replay state machine\\reject illegal transitions};
+    \node[box, below=of state] (encode) {4. Encode plaintext\\$P = \text{fields} \,\|\, \text{prev\_hash}$};
+    \node[box, below=of encode] (enc) {5. Encrypt (CTR)\\$C = P \oplus \text{KS}(K, \text{prev\_hash}, \text{ctr})$};
+    \node[box, below=of enc] (mac) {6. Authenticate\\$T = \text{HMAC}(K, C)$};
+    \node[box, below=of mac] (pack) {7. Append record\\$[\,\text{len}\,\|\,C\,\|\,T\,]$};
+    \draw[arr] (kd) -- (load);
+    \draw[arr] (load) -- (state);
+    \draw[arr] (state) -- (encode);
+    \draw[arr] (encode) -- (enc);
+    \draw[arr] (enc) -- (mac);
+    \draw[arr] (mac) -- (pack);
 \end{tikzpicture}
-\caption{Append protocol flow}
-\end{figure}
-\subsection{Protocol Description --- Verification (Load)}
-\begin{figure}[H]
+\caption{Append flow}
+\end{subfigure}
+\hfill
+\begin{subfigure}[t]{0.48\textwidth}
 \centering
 \begin{tikzpicture}[
-    node distance=0.6cm,
-    box/.style={rectangle, draw, rounded corners, minimum width=5cm, minimum height=0.8cm, align=center, fill=green!8},
-    fail/.style={rectangle, draw, rounded corners, minimum width=3cm, minimum height=0.6cm, align=center, fill=red!15},
+    node distance=0.45cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=6cm, minimum height=0.9cm, align=center, fill=green!8, font=\footnotesize},
     arr/.style={-{Stealth[length=3mm]}, thick},
 ]
-    \node[box] (unpack) {1. Unpack record\\read [len][C][T][\text{len}][C][T]
-[len][C][T]};
-    \node[box, below=of unpack] (macv) {2. Verify MAC\\HMAC-SHA-256(K,C)=?T\text{HMAC-SHA-256}(K, C) \stackrel{?}{=} T
-HMAC-SHA-256(K,C)=?T};
-    \node[box, below=of macv] (dec) {3. Decrypt\\P=C⊕keystream(K,prev_hash)P = C \oplus \text{keystream}(K, \text{prev\_hash})
-P=C⊕keystream(K,prev_hash)};
+    \node[box] (unpack) {1. Unpack record\\read $[\,\text{len}\,\|\,C\,\|\,T\,]$};
+    \node[box, below=of unpack] (macv) {2. Verify MAC\\$\text{HMAC}(K, C) \stackrel{?}{=} T$};
+    \node[box, below=of macv] (dec) {3. Decrypt\\$P = C \oplus \text{KS}(K, \text{prev\_hash}, \text{ctr})$};
     \node[box, below=of dec] (decode) {4. Decode plaintext\\extract fields + stored \texttt{prev\_hash}};
-    \node[box, below=of decode] (chain) {5. Chain check\\stored \texttt{prev\_hash} =?\stackrel{?}{=}
-=? expected};
-    \node[box, below=of chain] (update) {6. Update chain\\prev_hash←SHA-256(C)\text{prev\_hash} \leftarrow \text{SHA-256}(C)
-prev_hash←SHA-256(C)};
+    \node[box, below=of decode] (chain) {5. Check chain link\\stored $\stackrel{?}{=}$ expected};
+    \node[box, below=of chain] (update) {6. Advance chain\\$\text{prev\_hash} \leftarrow \text{SHA-256}(C)$};
     \node[box, below=of update] (next) {7. Next record (or done)};
-
-\draw[arr] (unpack) -- (macv);
-\draw[arr] (macv) -- (dec);
-\draw[arr] (dec) -- (decode);
-\draw[arr] (decode) -- (chain);
-\draw[arr] (chain) -- (update);
-\draw[arr] (update) -- (next);
-
-\node[fail, right=2.5cm of macv] (f1) {REJECT: integrity};
-\node[fail, right=2.5cm of chain] (f2) {REJECT: integrity};
-\draw[->, dashed, red] (macv) -- node[above, font=\scriptsize]{mismatch} (f1);
-\draw[->, dashed, red] (chain) -- node[above, font=\scriptsize]{mismatch} (f2);
+    \draw[arr] (unpack) -- (macv);
+    \draw[arr] (macv) -- (dec);
+    \draw[arr] (dec) -- (decode);
+    \draw[arr] (decode) -- (chain);
+    \draw[arr] (chain) -- (update);
+    \draw[arr] (update) -- (next);
 \end{tikzpicture}
-\caption{Verification (load) protocol flow}
+\caption{Verification (load) flow}
+\end{subfigure}
+\caption{Append and verification protocol flows}
 \end{figure}
-\subsection{Hash Chain Structure}
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}[
-    node distance=0.3cm and 1.2cm,
-    rec/.style={rectangle, draw, minimum width=2.2cm, minimum height=1.8cm, align=center, fill=blue!5},
-    hash/.style={ellipse, draw, minimum width=1.5cm, align=center, fill=orange!15, font=\scriptsize},
-    arr/.style={-{Stealth[length=2.5mm]}, thick},
-]
-    \node[hash] (h0) {H0H_0
-H0​\\0x00..000\text{x}00..00
-0x00..00};
-    \node[rec, right=1.2cm of h0] (r1) {Record 1\\C1,T1C_1, T_1
-C1​,T1​};
-    \node[hash, right=1.2cm of r1] (h1) {H1H_1
-H1​\\SHA-256(C1C_1
-C1​)};
-    \node[rec, right=1.2cm of h1] (r2) {Record 2\\C2,T2C_2, T_2
-C2​,T2​};
-    \node[hash, right=1.2cm of r2] (h2) {H2H_2
-H2​\\SHA-256(C2C_2
-C2​)};
-    \node[right=0.6cm of h2] (dots) {\Large⋯\cdots
-⋯};
-
-\draw[arr] (h0) -- node[above, font=\scriptsize]{nonce +} node[below, font=\scriptsize]{prev\_hash} (r1);
-\draw[arr] (r1) -- (h1);
-\draw[arr] (h1) -- node[above, font=\scriptsize]{nonce +} node[below, font=\scriptsize]{prev\_hash} (r2);
-\draw[arr] (r2) -- (h2);
-\draw[arr] (h2) -- (dots);
-\end{tikzpicture}
-\caption{Hash chain: each record's ciphertext hash serves as both the chain link and the encryption nonce for the next record.}
-\end{figure}
-The chain provides ordering guarantees: reordering or deleting a middle record breaks the chain at the next verification. This structure is similar to how certificate transparency logs and blockchain ledgers chain entries, but uses a simpler single-hash link rather than a Merkle tree
 
 % ===========================================================================
 \section{Implementation Details}
 % ===========================================================================
 
 \subsection{logappend}
-\begin{itemize}
-    \item \textbf{Argument parsing}: manual flag-based parser; validates token (alphanumeric), name (alphabetic), timestamp ($> 0$), mutual exclusivity of \texttt{-E}/\texttt{-G} and \texttt{-A}/\texttt{-L}
-    \item \textbf{File locking}: acquires an exclusive \texttt{flock(LOCK\_EX)} on a companion \texttt{.lock} file via \texttt{libc::flock()} \emph{before} loading the log; held until the append completes. Prevents TOCTOU races between concurrent appenders.
-    \item \textbf{Symlink protection}: all file opens use \texttt{O\_NOFOLLOW} (via \texttt{OpenOptionsExt::custom\_flags}); rejects symlink paths with \texttt{ELOOP}
-    \item \textbf{State validation}: full chain verified on load, then all entries replayed through a gallery state machine that enforces:
-    \begin{itemize}
-        \item Strictly increasing timestamps
-        \item No duplicate gallery arrivals
-        \item Room entry requires gallery presence
-        \item No simultaneous multi-room occupancy
-        \item Room departure must match current room
-    \end{itemize}
-    \item \textbf{Batch mode}: loads and validates once; caches \texttt{(state, last\_hash)} across lines with the same log path and key; applies + appends incrementally at O(1) per line instead of O(n). Lock held for the full batch duration.
-\end{itemize}
+The \texttt{logappend} tool uses a manual flag-based argument parser that validates the token (alphanumeric), the name (alphabetic), the timestamp ($> 0$), and the mutual exclusivity of \texttt{-E}/\texttt{-G} and \texttt{-A}/\texttt{-L} before any file access occurs. Once the arguments are validated, it acquires an exclusive advisory lock (\texttt{flock(LOCK\_EX)}) on a companion \texttt{.lock} file via \texttt{libc::flock()} and holds it for the entire load-validate-append critical section, which prevents TOCTOU races between concurrent appenders. All file opens use \texttt{O\_NOFOLLOW} (set through \texttt{OpenOptionsExt::custom\_flags}) so that symlinked paths are rejected with \texttt{ELOOP} rather than silently followed.
+
+With the lock held, the full chain is loaded and verified, after which every entry is replayed through a gallery state machine that enforces strictly increasing timestamps, forbids duplicate gallery arrivals, requires gallery presence before any room entry, rejects simultaneous occupancy of multiple rooms, and matches each room departure against the current room. Batch mode amortises this work: the chain is loaded and validated once, the resulting \texttt{(state, last\_hash)} pair is cached across lines that share the same log path and key, and each subsequent line is applied and appended incrementally in $O(1)$ instead of $O(n)$, with the lock held for the full batch duration.
 
 \subsection{logread}
-\begin{itemize}
-    \item \textbf{File locking}: acquires a shared \texttt{flock(LOCK\_SH)} on the companion \texttt{.lock} file; multiple concurrent readers proceed, but block during an active write
-    \item \textbf{Log verification}: full chain validation on every read (MAC check $\rightarrow$ decrypt $\rightarrow$ chain check for each record); rejects on any mismatch
-    \item \textbf{Queries supported}:
-    \begin{itemize}
-        \item \texttt{-S}: current gallery state --- who is in the gallery and which rooms they occupy
-        \item \texttt{-R}: room history for a person --- ordered list of rooms entered
-        \item \texttt{-I}: intersection --- rooms where all specified persons were simultaneously present
-    \end{itemize}
-    \item Intersection uses interval overlap detection across all target persons per room
-\end{itemize}
+The \texttt{logread} tool mirrors the same locking discipline, but on the read side: it acquires a shared lock (\texttt{flock(LOCK\_SH)}) on the companion \texttt{.lock} file, which lets multiple readers proceed concurrently while still blocking during an active write. Every invocation performs a full chain validation, where each record goes through MAC check $\rightarrow$ decrypt $\rightarrow$ chain check, and any mismatch causes the read to be rejected. Three query types are supported: \texttt{-S} reports the current gallery state (who is in the gallery and which rooms they occupy), \texttt{-R} returns the ordered list of rooms a given person has entered, and \texttt{-I} computes the intersection of rooms where all specified persons were simultaneously present, using interval overlap detection across the target persons on a per-room basis.
 
 % ===========================================================================
 \section{Performance Analysis}
 % ===========================================================================
-\begin{itemize}
-    \item \textbf{Single append}: O(n) --- must read and validate the full chain to obtain \texttt{last\_hash} and verify integrity before appending
-    \item \textbf{Batch append (k lines, same log)}: O(n + k) --- validates once, then each subsequent append is O(1) (encode, encrypt, MAC, write)
-    \item \textbf{Read/query}: O(n) --- must decrypt and validate the full chain regardless of query type
-    \item \textbf{File size per record}: 36 bytes overhead (4B length + 32B MAC) plus ciphertext; ciphertext $\approx$ plaintext size (stream cipher preserves length). A typical entry with a short name is $\sim$50--70 bytes of plaintext $\rightarrow$ $\sim$86--106 bytes on disk.
-    \item \textbf{Encoding optimisation}: \texttt{prev\_hash} stored as raw 32 bytes instead of 64-byte hex encoding, saving 32 bytes per record ($\sim$30\% reduction in plaintext size for short entries)
-    \item \textbf{Bottleneck}: full-chain validation on every single append is the main cost; could be amortised with a trusted checkpoint, but that requires an out-of-band trust anchor (see Security Analysis)
-\end{itemize}
+Because every append must recover \texttt{last\_hash} and verify integrity before it can write, a single append runs in $O(n)$, where $n$ is the current number of records. Batch mode amortises this: for $k$ lines on the same log, the chain is validated once and each subsequent append is $O(1)$ (encode, encrypt, MAC, write), giving an overall cost of $O(n + k)$. Read and query operations are also $O(n)$, since the full chain must be decrypted and validated regardless of which query is issued.
+
+On disk, each record carries a fixed overhead of 36 bytes --- a 4-byte length prefix and a 32-byte MAC --- on top of the ciphertext, and the ciphertext preserves the plaintext length since we use a stream cipher. A typical entry with a short name weighs in at roughly 50--70 bytes of plaintext, which translates to about 86--106 bytes once serialised. One deliberate optimisation is that \texttt{prev\_hash} is stored as the raw 32 bytes rather than a 64-byte hex encoding, saving 32 bytes per record --- around a 30\% reduction in plaintext size for short entries.
+
+The main bottleneck is the full-chain validation that runs on every single append. This cost could be amortised further with a trusted checkpoint, but doing so securely requires an out-of-band trust anchor, which we discuss in the Security Analysis.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Operation} & \textbf{Cost} \\
+\midrule
+Single append & $O(n)$ \\
+Batch append ($k$ lines, same log) & $O(n + k)$ \\
+Read / query (\texttt{-S}, \texttt{-R}, \texttt{-I}) & $O(n)$ \\
+Per-record on-disk overhead & 36 bytes (4B len + 32B MAC) \\
+\bottomrule
+\end{tabular}
+\caption{Asymptotic cost and storage overhead per operation, where $n$ is the number of records in the log.}
+\end{table}
 
 % ===========================================================================
 \section{Security Analysis}
@@ -382,15 +307,13 @@ The chain provides ordering guarantees: reordering or deleting a middle record b
 \textbf{Code reference:} \texttt{lock\_log\_exclusive()}, \texttt{lock\_log\_shared()} in \texttt{lib.rs}; lock acquisition in \texttt{run\_single()}, \texttt{run\_batch()} in \texttt{logappend.rs} and \texttt{main()} in \texttt{logread.rs}.
 
 % ===========================================================================
-\section{Intentional Vulnerability}
+\section{Intentional Vulnerability} \label{sec:intentional-vuln}
 % ===========================================================================
 
-\textbf{Description}: Although the stream cipher nonce is not reused throughout the logs, there is an exception: the nonce is the same in the first entry of every log. So, if there are 2 logs that use the same token, it is possible to do an xor operation between the first entry of both logs so that CypherText1 XOR Cyphertext2 = Plaintext1 XOR Plaintext2. 
-\\
-\\
-\textbf{Why it is subtle}: It is only in the first entry of each logs that the nonce is repeated. Since the nonce depends on the token + previous entry, if there is no previous entry then it solely becomes dependent on the token. This is only relevant if 2 log files use the same token, and only applies for the first entry since the nonce for the second entry is not solely reliant on the token anymore.
-\\
-\\
-\textbf{Potential exploitation}: If there are 2 log files that use the same token, which in a real-life scenario could be realistic, since there are other bad security habits that occur frequently, such as password re-use, an attacker can exploit the following property: CypherText1 XOR Cyphertext2 = Plaintext1 XOR Plaintext2. Due to the entries having a predictable and strict format, an attacker can feasibly recover the plaintexts for both entries, since the differences would only be in the time (although if sequential order is used instead of time, then both would be 1), names  and whenever its a guest or an employee.  For example, if the attacker guesses one name, he can recover the other since NameGuess XOR (NAME1 XOR NAME2) = the other name (if NameGuess = Name1 or Name2).
+\textbf{Description.} The keystream for each record is derived as $\text{SHA-256}(K \| \text{prev\_hash} \| \text{ctr})$. For every log, the very first record uses the genesis anchor ($\text{prev\_hash} = 0^{32}$) as its nonce. If two logs are created under the same token, they therefore share the same key $K$ \emph{and} the same nonce for their first record, which means both first records are encrypted under identical keystreams. XOR'ing the two first-record ciphertexts cancels the keystream and directly yields $P_1 \oplus P_2$.
+
+\textbf{Why it is subtle.} Nonce uniqueness holds for every record beyond the first, since each subsequent nonce is the SHA-256 of the previous record's ciphertext and therefore depends on all data written so far. The failure is isolated to record~1, where no prior ciphertext exists and the nonce collapses to a fixed constant. A quick reading of the code --- which passes an apparently ``unique'' \texttt{prev\_hash} as the nonce --- can easily miss that the genesis case defeats the uniqueness argument.
+
+\textbf{Potential exploitation.} Token reuse across logs is a realistic threat: operators routinely recycle credentials across environments for convenience. Once two first-record ciphertexts are obtained, the attacker computes $C_1 \oplus C_2 = P_1 \oplus P_2$. Because the plaintext format is highly structured (\texttt{ts|type|name|act|room} followed by 32 zero bytes of \texttt{prev\_hash}), most byte positions differ only in small, guessable substrings: the timestamp, the person type (\texttt{E}/\texttt{G}), the name, and the action (\texttt{A}/\texttt{L}). The trailing 32 bytes of \texttt{prev\_hash} are identical in both plaintexts and so cancel out entirely in $P_1 \oplus P_2$, providing no information but also no obstacle. Guessing one plaintext (for example, one of the names) immediately recovers the corresponding portion of the other via $P_2 = P_1 \oplus (C_1 \oplus C_2)$.
 
 \end{document}
