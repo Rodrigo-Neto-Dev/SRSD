@@ -343,4 +343,24 @@
 
     \textbf{Potential exploitation.} Token reuse across logs is a realistic threat: operators routinely recycle credentials across environments for convenience. Once two first-record ciphertexts are obtained, the attacker computes $C_1 \oplus C_2 = P_1 \oplus P_2$. Because the plaintext format is highly structured (\texttt{ts|type|name|act|room} followed by 32 zero bytes of \texttt{prev\_hash}), most byte positions differ only in small, guessable substrings: the timestamp, the person type (\texttt{E}/\texttt{G}), the name, and the action (\texttt{A}/\texttt{L}). The trailing 32 bytes of \texttt{prev\_hash} are identical in both plaintexts and so cancel out entirely in $P_1 \oplus P_2$, providing no information but also no obstacle. Guessing one plaintext (for example, one of the names) immediately recovers the corresponding portion of the other via $P_2 = P_1 \oplus (C_1 \oplus C_2)$.
 
+% ===========================================================================
+    \section*{Appendix: Delivered Log Files}
+% ===========================================================================
+
+    The \texttt{logs/} directory in the delivery contains three pre-populated log files. The keys required to read them with \texttt{logread} are listed below.
+
+    \begin{center}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Log file} & \textbf{Key (\texttt{-K})} \\
+        \midrule
+        \texttt{logs/logA} & \texttt{oCdZR2ArJgplcYyXfE2J} \\
+        \texttt{logs/logB} & \texttt{oCdZR2ArJgplcYyXfE2J} \\
+        \texttt{logs/logC} & \texttt{ddeQnpbEXm9lnaUVe3UW} \\
+        \bottomrule
+    \end{tabular}
+    \end{center}
+
+    Note that \texttt{logA} and \texttt{logB} share the same key --- this is intentional and directly demonstrates the nonce-reuse vulnerability described in \S\ref{sec:intentional-vuln}: their first records were encrypted under identical keystreams, so XOR'ing the two ciphertexts cancels the keystream and exposes $P_1 \oplus P_2$.
+
 \end{document}
