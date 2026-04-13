@@ -5,6 +5,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 
+\usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage{subcaption}
 \usepackage{fancyhdr}
@@ -64,7 +65,7 @@
 % ===========================================================================
 \section{Introduction}
 % ===========================================================================
-For this first part of the project, we implemented two CLI tools, \texttt{logappend} and \texttt{logread}, that manage an append-only, encrypted gallery log. These tools track employee and guest arrivals and departures through a gallery and its rooms. The \texttt{logappend} tool creates a log file and appends entries to it, while \texttt{logread} allows users to query the current state of the log and perform history analysis, such as checking which rooms a person has visited or identifying rooms where people have crossed paths. The project has a strong emphasis on security: confidentiality, integrity, and authenticity are central to the design. We also aimed for an implementation that is both optimized and performant. With these goals in mind, we chose Rust as our programming language, as it enables the creation of secure, high-performance software with low-level memory management and strong safety guarantees.
+For this first phase of the project we built two CLI tools, \texttt{logappend} and \texttt{logread}, that together manage an append-only, encrypted gallery log. The log tracks employee and guest arrivals and departures through a gallery and its rooms: \texttt{logappend} creates the log and writes new events to it, while \texttt{logread} answers queries about it --- the current state, which rooms a given person has visited, or which rooms two people shared at the same time. Security is the main design concern: the system should preserve the confidentiality, integrity, and authenticity of every log entry, while still being fast enough for interactive use. We picked Rust because it gives us memory safety without giving up low-level control or performance.
 
 % ===========================================================================
 \section{System Architecture}
@@ -75,13 +76,13 @@ The system consists of two CLI tools: \texttt{logappend}, which writes new event
 We assume the adversary has full read/write access to the log file on disk but does \emph{not} know the authentication token. Under this model, the properties we aim to guarantee are: confidentiality of all log contents, so that no information about entries is disclosed to an unauthorized party; integrity, ensuring no forging, reordering, insertion, or silent deletion of entries goes undetected; authenticity, so that only a holder of the correct token can append or read the log; and freshness, preventing the replay of old commands. We consider denial-of-service attacks out of scope, since an adversary with write access can always simply delete the file. Side-channel attacks on the running process, such as timing analysis of MAC verification or inference from record lengths, are likewise not addressed.
 \subsection{Design Decisions}
 Key management is kept simple by deriving a single key from the authentication token: one SHA-256 derivation produces the 32-byte key used for both encryption and MAC computation. This means an incorrect token immediately produces a wrong key, causing the first MAC check to fail and preventing any unauthorized access to the log's contents.
-Confidentiality is achieved by encrypting every record with a stream cipher before it is written to disk. The ciphertext is then protected using an Encrypt-then-MAC composition with HMAC-SHA-256, meaning each record is authenticated before decryption. This ordering prevents chosen-ciphertext manipulation and ensures that no plaintext is ever processed from a tampered record.
+Every record is encrypted with a stream cipher before it hits the disk, then authenticated with HMAC-SHA-256 under the Encrypt-then-MAC construction, so the MAC is verified before any plaintext is recovered and tampered ciphertext is rejected without ever being decrypted.
 To enforce ordering and prevent insertion or reordering, we use a hash chain: each record's ciphertext is hashed, and that hash is embedded in the next record's plaintext as both a chain link and a unique nonce for the stream cipher. Any modification to the sequence, whether reordering, inserting, or silently deleting records in the middle, breaks the chain and is detected on the next read. Chaining also keeps writes incremental: an append only needs to encrypt and authenticate the new record rather than rewriting the whole file, though reads still have to walk the full chain to validate integrity (see \ref{known_limitations}).
 Logical consistency is enforced through a state machine that replays every entry in sequence. The state machine rejects impossible transitions such as double arrivals, departures from the wrong room, or leaving when not present, and requires strictly increasing timestamps to prevent replay of old commands.
 This design means that every append requires a full-chain validation, resulting in $O(n)$ reads per operation. We accept this trade-off because it guarantees both integrity and state consistency on every write. Batch mode amortises the cost by validating the chain once and then appending the entries incrementally.
 
 \subsubsection{Known Limitations} \label{known_limitations}
-Log truncation and rollback to an older file version remain undetectable, as there is no out-of-band anchor for the current chain tip. Mitigating this would require a companion checkpoint file or an external counter, which falls outside the scope of this implementation. Token leakage through command-line arguments and process memory is inherited from the specification's requirement to pass the token via a \texttt{-K} flag and is accepted as a known limitation. Additionally, while the token is hashed through SHA-256 before use, no password-stretching algorithm such as Argon2 or PBKDF2 is applied, meaning a weak token could be brute-forced offline by MAC-checking candidates against the first record.
+Log truncation and rollback to an older file version remain undetectable, because there is no out-of-band anchor for the current chain tip. Fixing this properly would need a companion checkpoint file or an external counter, neither of which we implemented for this phase. Token leakage through command-line arguments and process memory is inherited from the specification's requirement to pass the token via a \texttt{-K} flag and is accepted as a known limitation. Additionally, while the token is hashed through SHA-256 before use, no password-stretching algorithm such as Argon2 or PBKDF2 is applied, meaning a weak token could be brute-forced offline by MAC-checking candidates against the first record.
 
 
 % ===========================================================================
@@ -118,7 +119,7 @@ The \textbf{Length} field (4 bytes) is a big-endian \texttt{u32} encoding the si
 % ===========================================================================
 
 \subsection{Cryptographic Primitives}
-The entire cryptographic scheme is built from a single primitive: SHA-256. Key derivation consists of a single-pass SHA-256 over the ASCII token, producing the 32-byte key $K$ used for both encryption and MAC computation. Encryption uses a custom CTR-mode stream cipher where each keystream block $i$ is computed as $\text{SHA-256}(K \| \text{nonce} \| i)$, with the nonce set to the previous record's \texttt{prev\_hash} (32 bytes) and $i$ encoded as a 64-bit little-endian counter. This is behaviorally equivalent to AES-CTR but uses SHA-256 as the pseudorandom function. Message authentication uses standard HMAC-SHA-256 applied to the ciphertext under the Encrypt-then-MAC paradigm, ensuring that ciphertext has not been tampered with before decryption is attempted. Finally, the chain hash is computed as SHA-256 of each record's ciphertext, which becomes the \texttt{prev\_hash} for the next record, creating a hash chain analogous to a Merkle chain where each record commits to the full history before it.
+The entire cryptographic scheme is built from a single primitive: SHA-256. Key derivation consists of a single-pass SHA-256 over the ASCII token, producing the 32-byte key $K$ used for both encryption and MAC computation. Encryption uses a custom CTR-mode stream cipher where each keystream block $i$ is computed as $\text{SHA-256}(K \| \text{nonce} \| i)$, with the nonce set to the previous record's \texttt{prev\_hash} (32 bytes) and $i$ encoded as a 64-bit little-endian counter. This is behaviorally equivalent to AES-CTR but uses SHA-256 as the pseudorandom function. Message authentication uses standard HMAC-SHA-256 over the ciphertext following Encrypt-then-MAC, so any tampered record is caught before the stream cipher is ever invoked. Finally, the chain hash is computed as SHA-256 of each record's ciphertext, which becomes the \texttt{prev\_hash} for the next record, creating a hash chain analogous to a Merkle chain where each record commits to the full history before it.
 
 \begin{table}[H]
 \centering
@@ -261,7 +262,7 @@ Because every append must recover \texttt{last\_hash} and verify integrity befor
 
 On disk, each record carries a fixed overhead of 36 bytes --- a 4-byte length prefix and a 32-byte MAC --- on top of the ciphertext, and the ciphertext preserves the plaintext length since we use a stream cipher. A typical entry with a short name weighs in at roughly 50--70 bytes of plaintext, which translates to about 86--106 bytes once serialised. One deliberate optimisation is that \texttt{prev\_hash} is stored as the raw 32 bytes rather than a 64-byte hex encoding, saving 32 bytes per record --- around a 30\% reduction in plaintext size for short entries.
 
-The main bottleneck is the full-chain validation that runs on every single append. This cost could be amortised further with a trusted checkpoint, but doing so securely requires an out-of-band trust anchor, which we discuss in the Security Analysis.
+The main bottleneck is the full-chain validation that runs on every single append and on every read. We measure its practical cost below and then sketch an optimisation that would remove it from the append and \texttt{-S} paths.
 
 \begin{table}[H]
 \centering
@@ -278,33 +279,59 @@ Per-record on-disk overhead & 36 bytes (4B len + 32B MAC) \\
 \caption{Asymptotic cost and storage overhead per operation, where $n$ is the number of records in the log.}
 \end{table}
 
+\subsection{Empirical Measurements}
+To back up the asymptotic analysis with real numbers, we wrote a benchmark suite (\texttt{tests/perf\_test.rs}, with a helper Python script \texttt{tests/gen\_perf\_batch.py} that produces valid batch files of arbitrary size). Each configuration starts from a fresh log, appends $N$ entries (the $N = 1$ case through a direct \texttt{logappend} call, the rest through \texttt{logappend -B}), and then runs the three read queries against the resulting log: \texttt{-S} for the current state, \texttt{-R -E Alice} for Alice's room history, and \texttt{-I -E Alice -E Bob} for the rooms Alice and Bob shared. Every configuration is repeated a few times and the median wall-clock time is reported. All numbers come from the \texttt{release} build on a local Linux machine.
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Mode} & \textbf{\textit{N}} & \textbf{Append (ms)} & \textbf{Per-line (ms)} & \textbf{\texttt{-S} (ms)} & \textbf{\texttt{-R} (ms)} & \textbf{\texttt{-I} (ms)} \\
+\midrule
+single & 1       &   1.49 & 1.4855 &  1.38 &  1.47 &  1.50 \\
+batch  & 5       &   1.66 & 0.3312 &  1.38 &  2.02 &  2.26 \\
+batch  & 50      &   2.62 & 0.0524 &  2.22 &  2.27 &  2.34 \\
+batch  & 500     &   8.85 & 0.0177 &  3.55 &  2.70 &  3.53 \\
+batch  & 5\,000  &  77.67 & 0.0155 &  8.48 & 14.05 & 14.56 \\
+batch  & 50\,000 & 682.78 & 0.0137 & 77.62 & 72.31 & 74.84 \\
+\bottomrule
+\end{tabular}
+\caption{Wall-clock cost of an append-plus-three-reads workload (medians, release binary). The \emph{Per-line} column divides total append time by $N$.}
+\label{tab:perf-empirical}
+\end{table}
+
+Batch mode amortises all the fixed-cost work (process start-up, argument parsing, key derivation, lock acquisition, initial full-chain validation, final \texttt{GalleryState} construction) across the whole batch, so the per-line append cost drops from about 1.5\,ms at $N = 1$ to roughly 14\,$\mu$s at $N = 50\,000$ --- a two-orders-of-magnitude improvement.
+
+\subsection{A Possible Optimisation: Encrypted State Snapshot} \label{sec:state-snapshot}
+An earlier version of this report alluded to storing a hash of the whole log file to skip re-validation on append, but that idea does not really help: even if integrity is trusted, the append still has to read and decrypt every record to rebuild the current \texttt{GalleryState} before the state machine can validate the new entry. The version of the idea that \emph{does} remove the bottleneck is to persist, alongside the log, an encrypted and authenticated snapshot of the \texttt{GalleryState} itself, together with the \texttt{last\_hash} of the log tail at the moment it was written, all protected under the same key $K$. An append then just loads the snapshot, checks that its embedded \texttt{last\_hash} still matches the log's actual tail, applies the new entry to the cached state, and writes both the new record and the updated snapshot --- cold append becomes $O(1)$, and so does the \texttt{-S} query. \texttt{-R} and \texttt{-I} still need the full event history, so they would not benefit without a richer snapshot. If the embedded tail hash ever disagrees with the file, the snapshot is discarded and we fall back to a full re-validation, so the optimisation degrades gracefully. Full rollback of both files in lockstep remains undetectable without an external trust anchor, as discussed in Attack~2.
+
 % ===========================================================================
 \section{Security Analysis}
 % ===========================================================================
 
-\subsection{Attack 1: Log Truncation (Tail Deletion)}
-\textbf{Description:} An adversary removes the last $k$ records from the log file. The remaining prefix is a valid chain, so \texttt{logread} processes it without error. The most recent events are silently erased. \\
-\textbf{Root cause:} No external anchor for the ``current tip'' of the chain; the only state is the file itself. \\
-\textbf{Mitigation status:} \emph{Partially mitigated.} The hash chain detects deletion of middle records, but tail truncation remains undetectable without an out-of-band monotonic counter or a signed checkpoint stored in a separate trust domain (different filesystem, append-only medium, or remote store). \\
-\textbf{Code reference:} Chain validation in \texttt{load\_log()} --- detects internal deletions but not tail truncation.
+\subsection{Attack 1: Tail Truncation and Rollback to an Older Version}
+\textbf{Description:} An adversary with write access either removes the last $k$ records from the log file or replaces the whole file with an older valid version from a backup or snapshot. Both actions produce a file that is a valid prefix of some past chain, so \texttt{logread} walks it without error --- the most recent events are silently erased or reverted. \\
+\textbf{Root cause:} There is no out-of-band anchor for the ``current tip'' of the chain, so the tip is whatever the file itself says it is. The hash chain binds every record to its predecessor, but nothing binds the last record to the fact that it is really the last. \\
+\textbf{Mitigation status:} \emph{Not mitigated in this phase.} A proper fix needs an external trust anchor that the attacker cannot rewrite in lockstep with the log: for example a companion state snapshot (see \S\ref{sec:state-snapshot}) stored on an append-only medium, a monotonic counter kept in a different trust domain (\texttt{chattr +a} file, separate volume, remote store), or a TPM. We considered a plain companion checkpoint file but rejected it because an adversary with write access to both files can simply roll them back together. \\
+\textbf{Code reference:} \texttt{load\_log()} at \texttt{src/lib.rs:150--177} walks records until \texttt{off >= buf.len()} and treats the last one it sees as the tip, with no external check against the file having been shortened or reverted.
 
-\subsection{Attack 2: Rollback to Older File Version}
-\textbf{Description:} Replace the current log with an older valid version from backup or snapshot. Undetectable since the older version passes all integrity checks. \\
-\textbf{Root cause:} Same as truncation --- no out-of-band state anchor. \\
-\textbf{Mitigation status:} Same family of fixes as truncation. A companion checkpoint file was considered but rejected: the checkpoint itself can be rolled back in lockstep unless stored in a separate trust domain. \\
-\textbf{Discussion:} A checkpoint file would improve append performance (skip re-validation) but does not add security unless the adversary cannot control both files simultaneously. Options include \texttt{chattr +a} (append-only flag), separate volume, or external monotonic counter.
+\subsection{Attack 2: Record Reordering and Insertion}
+\textbf{Description:} An adversary with write access tries to reorder existing records on disk (for example, swapping two legitimate records to make it look as though Alice arrived in room 1 before Bob left it), or to splice a brand-new fabricated record into the middle of the log. \\
+\textbf{Root cause:} Records are concatenated back-to-back with no positional metadata, so the physical byte order is the only thing that dictates the logical order. Without a binding between adjacent records, both reordering and insertion would go unnoticed. \\
+\textbf{Mitigation status:} \textbf{Fully mitigated} by the combination of the hash chain and the per-record MAC. Every plaintext embeds the SHA-256 of the previous record's ciphertext as a built-in link, and the verifier recomputes the expected link from the running tail hash on each step, so any reordering immediately breaks the embedded \texttt{prev\_hash} check. Forging a new record to splice into the middle additionally requires producing a valid HMAC-SHA-256 tag under the token-derived key, which the attacker does not have. Together, the two defences mean no undetected reordering and no forged insertion. \\
+\textbf{Code reference:} The chain link is appended to every plaintext in \texttt{LogEntry::encode()} at \texttt{src/lib.rs:83--91} (raw 32 bytes, no hex encoding), \texttt{append\_entry()} at \texttt{src/lib.rs:181--193} writes the encrypted record plus its MAC tag, and the verification loop in \texttt{load\_log()} at \texttt{src/lib.rs:165--173} runs \emph{MAC check} $\rightarrow$ \emph{decrypt} $\rightarrow$ \emph{stored\_prev vs expected} on every record; the stored-link test at \texttt{src/lib.rs:170} is the specific line that rejects reordered and spliced records.
 
 \subsection{Attack 3: Symlink / File-Injection Attack}
-\textbf{Description:} If the log path is a symlink to a sensitive file (e.g., \texttt{/etc/passwd}), \texttt{OpenOptions::create(true).append(true)} follows the symlink and appends ciphertext to the target. Low practical impact (opaque binary data), but it is a symlink-follow weakness. \\
+\textbf{Description:} If the log path is a symlink to a sensitive file (e.g., \texttt{/etc/passwd}), a default \texttt{OpenOptions::create(true).append(true)} would follow the symlink and append ciphertext to the target. The practical impact is low because what ends up on the target is opaque binary data, but it is still a symlink-follow weakness that could corrupt an unrelated file. \\
 \textbf{Root cause:} \texttt{File::open} and \texttt{OpenOptions::open} follow symlinks by default on Unix. \\
-\textbf{Mitigation:} \textbf{Implemented.} All file opens use \texttt{O\_NOFOLLOW} via \texttt{OpenOptionsExt::custom\_flags(libc::O\_NOFOLLOW)}. If the target path is a symlink, the open fails with \texttt{ELOOP}. \\
-\textbf{Code reference:} \texttt{load\_log()} and \texttt{append\_entry()} in \texttt{lib.rs}.
+\textbf{Mitigation status:} \textbf{Fully mitigated.} All file opens use \texttt{O\_NOFOLLOW} via \texttt{OpenOptionsExt::custom\_flags(libc::O\_NOFOLLOW)}; if the target path is a symlink, the open fails with \texttt{ELOOP} and the operation is rejected before any byte is read or written. \\
+\textbf{Code reference:} \texttt{load\_log()} at \texttt{src/lib.rs:154--157} and \texttt{append\_entry()} at \texttt{src/lib.rs:186--190}, both of which chain \texttt{.custom\_flags(libc::O\_NOFOLLOW)} onto their \texttt{OpenOptions} before calling \texttt{.open()}.
 
 \subsection{Attack 4: TOCTOU Race / Concurrent Append}
-\textbf{Description:} Two concurrent \texttt{logappend} processes both call \texttt{load\_log}, both compute the same \texttt{prev\_hash}, both append. The second writer's record has a \texttt{prev\_hash} that doesn't match its actual predecessor $\rightarrow$ chain breaks on next read. Worse: interleaved \texttt{write\_all} calls could splice two records' bytes. \\
-\textbf{Root cause:} No file locking; append-only mode is only atomic per \texttt{write\_all} on Linux for small writes, not guaranteed across platforms. \\
-\textbf{Mitigation:} \textbf{Implemented.} Exclusive advisory lock (\texttt{libc::flock(fd, LOCK\_EX)}) on a companion \texttt{.lock} file wraps the entire load $\rightarrow$ validate $\rightarrow$ append critical section. Readers use a shared lock (\texttt{LOCK\_SH}) allowing concurrent reads but blocking during writes. \\
-\textbf{Code reference:} \texttt{lock\_log\_exclusive()}, \texttt{lock\_log\_shared()} in \texttt{lib.rs}; lock acquisition in \texttt{run\_single()}, \texttt{run\_batch()} in \texttt{logappend.rs} and \texttt{main()} in \texttt{logread.rs}.
+\textbf{Description:} Two concurrent \texttt{logappend} processes both call \texttt{load\_log}, both compute the same \texttt{prev\_hash}, and both append. The second writer's record carries a \texttt{prev\_hash} that no longer matches its actual predecessor on disk, so the chain breaks on the next read; in the worst case, interleaved \texttt{write\_all} calls can splice two records' bytes together and corrupt the file. \\
+\textbf{Root cause:} Without explicit file locking, \texttt{O\_APPEND} is only atomic per single \texttt{write(2)} below \texttt{PIPE\_BUF} on Linux, and that guarantee is not portable to other Unixes. \\
+\textbf{Mitigation status:} \textbf{Fully mitigated.} An exclusive advisory lock (\texttt{libc::flock(fd, LOCK\_EX)}) on a companion \texttt{.lock} file wraps the entire load $\rightarrow$ validate $\rightarrow$ append critical section in \texttt{logappend}, while \texttt{logread} uses a shared lock (\texttt{LOCK\_SH}) so concurrent reads are allowed but blocked during an active write. \\
+\textbf{Code reference:} \texttt{lock\_log\_exclusive()} at \texttt{src/lib.rs:365--377} and \texttt{lock\_log\_shared()} at \texttt{src/lib.rs:380--392} implement the primitives; they are acquired by \texttt{run\_single()} at \texttt{src/bin/logappend.rs:104}, \texttt{run\_batch()} at \texttt{src/bin/logappend.rs:158}, and \texttt{main()} at \texttt{src/bin/logread.rs:103}, in each case held across the full load/validate/append (or load/query) section.
 
 % ===========================================================================
 \section{Intentional Vulnerability} \label{sec:intentional-vuln}
