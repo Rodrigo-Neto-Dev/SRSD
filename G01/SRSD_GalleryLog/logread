@@ -1,0 +1,2 @@
+#!/bin/bash
+java -jar target/secure-gallery-1.0-SNAPSHOT-logread.jar "$@"
