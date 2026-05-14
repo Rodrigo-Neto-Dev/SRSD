@@ -1,0 +1,6 @@
+-T 1 -K batchkey -A -E Alice /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log
+-T 2 -K batchkey -A -G Bob /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log
+-T 3 -K batchkey -A -E Alice -R 1 /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log
+-T 3 -K batchkey -A -G Bob -R 1 /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log
+-T 4 -K batchkey -A -G Carol /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log
+-T 5 -K batchkey -A -G Carol -R 2 /c/Users/rodri/MyStuff/FCUL/Masters/Semestre2/SRSD/Project/SRSD/G01/SRSD_GalleryLog/logs_g1/demo_batch_log.log

@@ -21,5 +21,9 @@ logread: logread.c
 clean:
 	rm -f $(TARGETS)
 
+demo: demo.sh
+	chmod +x demo.sh
+	./demo.sh
+
 # Indica que estes alvos não são ficheiros
-.PHONY: all clean
+.PHONY: all clean demo
