@@ -21,7 +21,7 @@ section() { echo -e "\n${YELLOW}${BOLD}========================================$
 pause()   { echo -e "\n${BOLD}Press ENTER to continue...${RESET}"; read -r; }
 
 # -- Environment Setup --
-LOG_DIR="$(pwd)/logs_g1"
+LOG_DIR="$(pwd)/logs"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/demo.log"
 BATCH="$LOG_DIR/demo_batch.txt"
@@ -268,92 +268,90 @@ say "State after batch (line 4 failed silently, rest processed):"
 cmd_read -K batchkey -S "$BLOG"
 pause
 #
-## ============================================================================
-#section "9 - Cryptographic integrity - AES-GCM IV uniqueness"
-## ============================================================================
-#
-#CLOG="$LOG_DIR/demo_crypto.log"
-#rm -f "$CLOG"
-#
-#say "Creating a log with multiple records to check IV uniqueness..."
-#run_append -T 1 -K cryptotoken -A -E Alice "$CLOG" > /dev/null
-#run_append -T 2 -K cryptotoken -A -G Bob   "$CLOG" > /dev/null
-#run_append -T 3 -K cryptotoken -A -E Alice -R 1 "$CLOG" > /dev/null
-#run_append -T 4 -K cryptotoken -A -G Bob   -R 1 "$CLOG" > /dev/null
-#
-#echo ""
-#say "Examining encrypted records for IV reuse (same log path = same IV)..."
-#echo "  Each record should have a unique IV. Reuse indicates catastrophic failure."
-#echo ""
-#
-## Extract and compare IVs from the binary log file
-## Group 1 format: length || IV || AES-GCM(ciphertext)
-## IV is 12 bytes, preceded by a length field
-#
-#say "Dumping first 64 bytes of log to inspect IV structure:"
-#xxd -l 64 "$CLOG"
-#
-#echo ""
-#say "Checking if all records share the same IV (nonce reuse vulnerability):"
-## Parse the binary file to extract IVs from each record
-#python << 'PYEOF'
-#import sys
-#
-#log_path = sys.argv[1]
-#with open(log_path, 'rb') as f:
-#    data = f.read()
-#
-## Skip header: BLOG magic (4) + version (1) + salt (16) = 21 bytes
-## Then each record: length (4 bytes big-endian) || IV (12 bytes) || ciphertext+tag
-#offset = 21
-#ivs = []
-#record_num = 0
-#
-#while offset + 16 < len(data):
-#    if offset + 4 > len(data):
-#        break
-#    length = int.from_bytes(data[offset:offset+4], 'big')
-#    if length <= 0 or length > 100000:
-#        break
-#    iv_start = offset + 4
-#    iv = data[iv_start:iv_start+12]
-#    if len(iv) == 12:
-#        ivs.append((record_num, iv.hex()))
-#        record_num += 1
-#    offset = iv_start + length
-#
-#print(f"Found {len(ivs)} encrypted records.")
-#if len(ivs) > 1:
-#    first_iv = ivs[0][1]
-#    all_same = all(iv == first_iv for _, iv in ivs)
-#    if all_same:
-#        print(f"CRITICAL: All {len(ivs)} records use the SAME IV: {first_iv}")
-#        print("This is an AES-GCM nonce reuse vulnerability!")
-#        sys.exit(1)
-#    else:
-#        print("IVs are unique across records (secure).")
-#        for num, iv in ivs:
-#            print(f"  Record {num}: IV = {iv}")
-#        sys.exit(0)
-#else:
-#    print("Not enough records to compare.")
-#    sys.exit(2)
-#PYEOF
-#
-#IV_CHECK=$?
-#if [[ $IV_CHECK -eq 1 ]]; then
-#    fail "AES-GCM nonce reuse detected - confidentiality broken!"
-#elif [[ $IV_CHECK -eq 0 ]]; then
-#    ok "All records use unique IVs - cryptographic design is correct."
-#else
-#    echo "  (Could not determine IV uniqueness from available data)"
-#fi
-#
-#echo ""
-#say "Verifying that logread still accepts the log with correct token:"
-#cmd_read -K cryptotoken -S "$CLOG"
-#
-#pause
+# ============================================================================
+section "9 - Cryptographic integrity - AES-GCM IV uniqueness"
+# ============================================================================
+
+CLOG="$LOG_DIR/demo_crypto.log"
+rm -f "$CLOG"
+
+say "Creating a log with multiple records to check IV uniqueness..."
+run_append -T 1 -K cryptotoken -A -E Alice "$CLOG" > /dev/null
+run_append -T 2 -K cryptotoken -A -G Bob   "$CLOG" > /dev/null
+run_append -T 3 -K cryptotoken -A -E Alice -R 1 "$CLOG" > /dev/null
+run_append -T 4 -K cryptotoken -A -G Bob   -R 1 "$CLOG" > /dev/null
+
+echo ""
+say "Examining encrypted records for IV reuse (same log path = same IV)..."
+echo "  Each record should have a unique IV. Reuse indicates catastrophic failure."
+echo ""
+
+say "Checking if all records share the same IV (nonce reuse vulnerability):"
+
+# Fix: Use python and explicitly pass "$CLOG" to the inline script execution environment
+python - "$CLOG" << 'PYEOF'
+import sys
+import os
+
+log_path = sys.argv[1]
+if not os.path.exists(log_path):
+    print(f"Error: Log file {log_path} not found.")
+    sys.exit(2)
+
+with open(log_path, 'rb') as f:
+    data = f.read()
+
+# Skip header: BLOG magic (4) + version (1) + salt (16) = 21 bytes
+# Then each record: length (4 bytes big-endian) || IV (12 bytes) || ciphertext+tag
+offset = 21
+ivs = []
+record_num = 0
+
+while offset + 16 < len(data):
+    if offset + 4 > len(data):
+        break
+    length = int.from_bytes(data[offset:offset+4], 'big')
+    if length <= 0 or length > 100000:
+        break
+    iv_start = offset + 4
+    iv = data[iv_start:iv_start+12]
+    if len(iv) == 12:
+        ivs.append((record_num, iv.hex()))
+        record_num += 1
+    offset = iv_start + length
+
+print(f"  Found {len(ivs)} encrypted records.")
+if len(ivs) > 1:
+    first_iv = ivs[0][1]
+    all_same = all(iv == first_iv for _, iv in ivs)
+    if all_same:
+        print(f"  CRITICAL: All {len(ivs)} records use the SAME IV: {first_iv}")
+        print("  This is an AES-GCM nonce reuse vulnerability!")
+        sys.exit(1)
+    else:
+        print("  IVs are unique across records (secure).")
+        for num, iv in ivs:
+            print(f"    Record {num}: IV = {iv}")
+        sys.exit(0)
+else:
+    print("  Not enough records to compare.")
+    sys.exit(2)
+PYEOF
+
+IV_CHECK=$?
+if [[ $IV_CHECK -eq 1 ]]; then
+    fail "AES-GCM nonce reuse detected - confidentiality broken!"
+elif [[ $IV_CHECK -eq 0 ]]; then
+    ok "All records use unique IVs - cryptographic design is correct."
+else
+    echo "  (Could not determine IV uniqueness from available data)"
+fi
+
+echo ""
+say "Verifying that logread still accepts the log with correct token:"
+cmd_read -K cryptotoken -S "$CLOG"
+
+pause
 
 # ============================================================================
 section "All done!"
