@@ -640,7 +640,7 @@ cp logfile6_backup logfile6
         \item \textbf{Language and build system:} C with Makefile and OpenSSL.
         \item \textbf{Programs analyzed:} \texttt{logappend} and \texttt{logread}.
         \item \textbf{Behavioral status:} Passed most functional and security-behavior tests.
-        \item \textbf{Main result:} The implementation behaved safely in the tested invalid-action cases, but it reported some safe rejections with the wrong return code. It also showed the same room-history duplication issue observed in Group 1. \textbf{Most critically, we identified two security vulnerabilities: weak PBKDF2 parameters that make offline token recovery practical, and a race-condition integrity vulnerability that allows concurrent \texttt{logappend} processes to corrupt the log state, leaving it in an inconsistent condition that permanently rejects all subsequent legitimate operations.}
+        \item \textbf{Main result:} The implementation behaved safely in the tested invalid-action cases, but it reported some safe rejections with the wrong return code. It also showed the same room-history duplication issue observed in Group 1. \textbf{Most critically, we identified two security vulnerabilities: a race-condition integrity vulnerability that allows concurrent \texttt{logappend} processes to corrupt the log state, leaving it in an inconsistent condition that permanently rejects all subsequent legitimate operations, and weak PBKDF2 parameters that make offline token recovery practical.}
     \end{itemize}
 
     \subsection{How We Built and Ran the Implementation}
@@ -694,6 +694,8 @@ make
         \item \textbf{Input validation:} Names, timestamps, room identifiers, duplicate flags, and gallery-state transitions are validated before committing new entries.
     \end{itemize}
 
+    \textbf{Cryptographic analysis:} We examined the key-derivation mechanism and identified that PBKDF2-HMAC-SHA256 is configured with only \textbf{1 iteration}, far below modern secure standards. This dramatically reduces the computational cost of offline brute-force attacks against the authentication token.
+
     \textbf{Concurrency analysis:} During code review, we examined how the implementation handles concurrent \texttt{logappend} invocations targeting the same log file. We observed that the program opens the log file, reads its current state to validate transitions (e.g., checking whether an employee is already in a room, whether a timestamp is valid, and whether the number of entries is consistent), and then writes the new encrypted record. However, \textbf{there is no file locking or atomic read-modify-write primitive protecting the validation-and-append sequence}. This creates a Time-of-Check to Time-of-Use (TOCTOU) race window: two concurrent processes can both read the same log state, both decide their respective operations are valid, and both write, producing an internally inconsistent log.
 
     \subsection{Attack Summary}
@@ -704,8 +706,7 @@ make
             \toprule
             \textbf{ID} & \textbf{Type} & \textbf{Status} & \textbf{Impact} \\
             \midrule
-            G21-A1 & Integrity & Exploited & Race-condition TOCTOU allows concurrent appends to corrupt log state, causing permanent denial of service \\
-            G21-A2 & Confidentiality & Exploited & Offline brute-force attack possible due to PBKDF2 configured with 1 iteration \\
+            G21-A2 & Confidentiality & Exploited & Offline brute-force attack possible due to PBKDF2 configured with 1 iteration \\G21-A1 & Integrity & Exploited & Race-condition TOCTOU allows concurrent appends to corrupt log state, causing permanent denial of service \\
             G21-B1 & Correctness & Reproduced & Duplicate rooms in \texttt{-R} history output \\
             G21-B2 & Compatibility & Reproduced & Some safe rejections use the wrong return code \\
             \bottomrule
@@ -764,7 +765,7 @@ make
 ./logread -K raceToken -S test4
 # Output:
 # Alice
-# 
+#
 # 20:Alice
 # (Alice appears to be in room 20, but never left room 10)
 
@@ -788,7 +789,7 @@ make
 ./logread -K raceToken -S test4
 # Output:
 # Alice
-# 
+#
 # 20:Alice
     \end{lstlisting}
 
@@ -827,125 +828,6 @@ Alice
 )
     \end{lstlisting}
 
-    \subsection{Weak Key Derivation and Offline Brute-Force Vulnerability}
-
-    \subsubsection{High-Level Description}
-    During manual code review of the cryptographic implementation, we identified a critical weakness in the password-based key derivation mechanism used by Group 21. Although the implementation uses PBKDF2-HMAC-SHA256, which is normally considered a secure password-hardening function, the iteration count was incorrectly configured to only \textbf{1 iteration}. This completely defeats the intended computational cost of PBKDF2 and makes brute-force and dictionary attacks practical against encrypted logs.
-
-    We successfully reproduced this vulnerability by performing an offline dictionary attack against a protected log file using a standard password wordlist included by default in Kali Linux distributions. The correct token was recovered in a short amount of time without requiring any interaction with the legitimate user or modification of the target log.
-
-    \subsubsection{Root Cause}
-
-    The vulnerability originates in the key-derivation routine:
-
-    \begin{lstlisting}[language=C]
-static void gen_key(const char *token,
-                    const unsigned char *salt,
-                    unsigned char *key) {
-
-    static const unsigned char default_salt[16] =
-        "FIXED_SALT_1234";
-
-    if (!salt) salt = default_salt;
-
-    if (!PKCS5_PBKDF2_HMAC(token, strlen(token),
-                            salt, 16,
-                            1, EVP_sha256(),
-                            32, key)) {
-        fprintf(stderr, "Error deriving key\n");
-        free_contexts();
-        exit(111);
-    }
-}
-    \end{lstlisting}
-
-    The implementation configures PBKDF2 with only a single iteration:
-
-    \begin{lstlisting}[language=C]
-1, EVP_sha256(),
-    \end{lstlisting}
-
-    PBKDF2 is specifically designed to slow down brute-force attacks by requiring a large number of repeated cryptographic computations. Modern secure deployments typically use tens or hundreds of thousands of iterations. Using only one iteration makes the derived key almost as cheap to compute as a direct hash operation, enabling extremely fast offline password guessing.
-
-    Additionally, the fallback use of a fixed default salt:
-
-    \begin{lstlisting}[language=C]
-static const unsigned char default_salt[16] =
-    "FIXED_SALT_1234";
-    \end{lstlisting}
-
-    further weakens resistance against precomputed attacks and password reuse scenarios.
-
-    \subsubsection{Exploit Preconditions}
-
-    \begin{itemize}
-        \item The attacker can obtain a copy of the encrypted log file.
-        \item The attacker does not know the authentication token.
-        \item The attacker can perform offline password guessing attempts locally.
-    \end{itemize}
-
-    \subsubsection{Reproduction Steps}
-
-    The vulnerability was reproduced using a custom Python script named \texttt{crack.py}, which will be submitted together with the project deliverables.
-
-    We used a standard password wordlist bundled with Kali Linux systems to perform the dictionary attack.
-
-    Example execution flow:
-
-    \begin{lstlisting}[language=bash]
-# 1. Create or obtain a target log
-./logappend -T 1 -K password123 -E Alice -A weak.log
-
-# 2. Execute the offline cracking script
-python3 crack.py weak.log \
-    /usr/share/wordlists/rockyou.txt
-
-# 3. Script successfully recovers the token
-# Output:
-# [+] Password found: password123
-    \end{lstlisting}
-
-    \subsubsection{Observed Result}
-
-    The password was successfully recovered using a standard dictionary attack and a commonly available Kali Linux wordlist. Because PBKDF2 was configured with only one iteration, password guesses could be evaluated extremely quickly, making brute-force attacks practical even on consumer hardware.
-
-    \begin{figure}[H]
-        \centering
-        \includegraphics[width=0.92\linewidth]{weakEncription_g21.png}
-        \caption{Successful offline dictionary attack against Group 21 logs using the provided \texttt{crack.py} script and a standard Kali Linux wordlist.}
-        \label{fig:weak-encryption-g21}
-    \end{figure}
-
-    \subsubsection{Expected Behavior on a Correct Implementation}
-
-    A secure implementation should use:
-    \begin{itemize}
-        \item A high PBKDF2 iteration count (typically at least 100000 iterations or more).
-        \item A unique cryptographically random salt for every log.
-        \item Password-hardening parameters designed to significantly slow offline guessing attacks.
-    \end{itemize}
-
-    Under a correct implementation, recovering the token using a standard dictionary attack should be computationally expensive and significantly slower.
-
-    \subsubsection{Security Impact}
-
-    This vulnerability constitutes a serious confidentiality weakness:
-    \begin{itemize}
-        \item \textbf{Offline brute-force feasibility:} An attacker can recover weak or commonly used tokens efficiently without interacting with the system.
-        \item \textbf{Loss of confidentiality:} Once the token is recovered, the attacker can decrypt and inspect protected log contents.
-        \item \textbf{Potential integrity compromise:} Knowledge of the token also enables unauthorized appends and manipulation attempts against the log.
-        \item \textbf{Scalability of attack:} Because the derivation cost is extremely low, large password dictionaries can be tested rapidly.
-    \end{itemize}
-
-    \subsubsection{Attack Artifacts}
-
-    The following files will be submitted together with the report:
-    \begin{itemize}
-        \item \texttt{attacks/group21/crack.py}
-        \item Example vulnerable log files
-        \item Reproduction instructions and testcase commands
-    \end{itemize}
-
     \subsection{Tests Attempted but Found Secure}
     Besides the behavioral issues listed above, we also tried several attacks that did \emph{not} lead to successful security breaks in Group 21:
     \begin{itemize}
@@ -959,19 +841,9 @@ python3 crack.py weak.log \
     \subsection{Conclusion for Group 21}
     Group 21 passed most of the shared behavioral suite. The main observed problems were not successful security attacks: room-history output duplicates revisited rooms, and some invalid operations are signalled with an incorrect return code even though the actions are safely rejected. Because the unsafe actions were not committed, we do not classify those return-code mismatches as integrity violations.
 
-    However, \textbf{the race-condition vulnerability G21-A1 is a severe security-relevant finding.} The absence of file locking or atomic read-modify-write primitives allows concurrent \texttt{logappend} processes to corrupt the log state, producing an impossible room-occupancy condition and permanently denying service to all subsequent legitimate operations. This constitutes both an integrity violation (acceptance of an invalid state transition) and a denial-of-service attack against the audit log.
+    However, \textbf{the weak PBKDF2 configuration (G21-A2) is the most severe security-relevant finding.} The implementation uses PBKDF2-HMAC-SHA256 with only a single iteration, making offline dictionary and brute-force attacks practical. Using a standard Kali Linux wordlist and our provided \texttt{crack.py} script, we successfully recovered authentication tokens from protected logs. This constitutes a critical confidentiality violation, as knowledge of the token also enables unauthorized appends and further integrity compromise.
 
-    We additionally identified a serious cryptographic weakness in the password-based key derivation configuration. Although the implementation uses PBKDF2-HMAC-SHA256, it incorrectly configures the derivation process with only one iteration, making offline dictionary and brute-force attacks practical. Using a standard Kali Linux wordlist and our provided \texttt{crack.py} script, we successfully recovered authentication tokens from protected logs. This substantially weakens the confidentiality guarantees of the system.
-
-% ===========================================================================
-    \section{Submitted Attack Artifacts}
-% ===========================================================================
-    The following files should be submitted together with this report if attacks are implemented:
-    \begin{itemize}
-        \item \texttt{attacks/group1/exploit.py}: Python script that parses Group 1 encrypted logs, detects AES-GCM IV reuse, and infers per-record structural information (ciphertext length, plaintext length, event-type classification).
-        \item \texttt{attacks/group1/}: Additional scripts, modified logs, and README/testcase commands for Group 1.
-        \item \texttt{attacks/group21/}: Scripts, modified logs, and README/testcase commands for Group 21.
-    \end{itemize}
+    We additionally identified a serious race-condition integrity vulnerability (G21-A1). The absence of file locking or atomic read-modify-write primitives allows concurrent \texttt{logappend} processes to corrupt the log state, producing an impossible room-occupancy condition and permanently denying service to all subsequent legitimate operations. This constitutes both an integrity violation (acceptance of an invalid state transition) and a denial-of-service attack against the audit log.
 
 % ===========================================================================
     \section{Overall Conclusion}
@@ -980,7 +852,7 @@ python3 crack.py weak.log \
 
     \textbf{Security-relevant findings:} Group 1 suffers from four major vulnerabilities: (1) a catastrophic AES-GCM nonce reuse vulnerability (G1-A1) caused by deterministic IV generation, which completely breaks the confidentiality guarantees of the encrypted log; (2) an information-disclosure side-channel (G1-A2) via predictable encrypted record sizes that leaks entry counts and name lengths; (3) a path-traversal vulnerability (G1-A3) in the log filename argument that allows arbitrary file write and read outside the intended directory; and (4) an undetected log-rollback vulnerability (G1-A4) in which substituting an older version of the log file goes completely undetected, allowing an attacker to selectively erase history and continue appending new entries to the truncated chain as if the deleted records never existed. This violates the fundamental append-only immutability property required of any secure audit log.
 
-    Group 21 suffers from two major vulnerabilities. First, the implementation contains a race-condition integrity vulnerability (G21-A1) in which concurrent \texttt{logappend} processes can corrupt the log state through a Time-of-Check to Time-of-Use (TOCTOU) window, permanently denying service to all subsequent legitimate operations. Second, the implementation configures PBKDF2-HMAC-SHA256 with only a single iteration (G21-A2), making offline dictionary and brute-force attacks practical. Using a standard Kali Linux password wordlist and our provided \texttt{crack.py} script, we successfully recovered valid authentication tokens from encrypted logs.
+    Group 21 suffers from two major vulnerabilities. First, the implementation configures PBKDF2-HMAC-SHA256 with only a single iteration (G21-A2), making offline dictionary and brute-force attacks practical. Using a standard Kali Linux password wordlist and our provided \texttt{crack.py} script, we successfully recovered valid authentication tokens from encrypted logs. This is a critical confidentiality failure that also enables subsequent integrity compromise. Second, the implementation contains a race-condition integrity vulnerability (G21-A1) in which concurrent \texttt{logappend} processes can corrupt the log state through a Time-of-Check to Time-of-Use (TOCTOU) window, permanently denying service to all subsequent legitimate operations.
 
     These findings represent severe design errors in critical security mechanisms across both implementations.
 
